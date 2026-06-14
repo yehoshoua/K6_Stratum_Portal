@@ -1,0 +1,94 @@
+@import "tailwindcss";
+
+/* Base / Dark Theme variables */
+:root, html[data-theme="dark"] {
+  --background: #090d16;
+  --foreground: #f8fafc;
+  --card-bg: rgba(15, 23, 42, 0.45);
+  --card-border: rgba(30, 41, 59, 0.8);
+  --sidebar-bg: #0b0f19;
+  --input-bg: rgba(2, 6, 23, 0.8);
+  --primary: #a855f7;
+  --primary-hover: #9333ea;
+  --accent: #ec4899;
+}
+
+/* Light Theme variables & Tailwind Slate overrides */
+html[data-theme="light"] {
+  --background: #f1f5f9;
+  --foreground: #0f172a;
+  --card-bg: #ffffff;
+  --card-border: #cbd5e1;
+  --sidebar-bg: #ffffff;
+  --input-bg: #ffffff;
+  --primary: #8b5cf6;
+  --primary-hover: #7c3aed;
+  --accent: #db2777;
+
+  /* Redefine Tailwind's slate color variables dynamically for light mode */
+  --color-slate-950: #f1f5f9; /* main dashboard background */
+  --color-slate-900: #ffffff; /* card background */
+  --color-slate-850: #cbd5e1;
+  --color-slate-800: #cbd5e1; /* border color */
+  --color-slate-700: #94a3b8;
+  --color-slate-600: #64748b;
+  --color-slate-500: #475569;
+  --color-slate-400: #334155; /* text-slate-400 (muted text) */
+  --color-slate-300: #1e293b;
+  --color-slate-200: #0f172a; /* text-slate-200 (regular text) */
+  --color-slate-100: #0f172a;
+  --color-slate-50: #0f172a;
+  --color-white: #0f172a;      /* text-white becomes dark slate text */
+}
+
+
+/* System-based styling selectors */
+@media (prefers-color-scheme: light) {
+  html[data-theme="system"] {
+    --background: #f1f5f9;
+    --foreground: #0f172a;
+    --card-bg: #ffffff;
+    --card-border: #cbd5e1;
+    --sidebar-bg: #ffffff;
+    --input-bg: #ffffff;
+    --primary: #8b5cf6;
+    --primary-hover: #7c3aed;
+    --accent: #db2777;
+
+    --color-slate-950: #f1f5f9;
+    --color-slate-900: #ffffff;
+    --color-slate-850: #cbd5e1;
+    --color-slate-800: #cbd5e1;
+    --color-slate-700: #94a3b8;
+    --color-slate-600: #64748b;
+    --color-slate-500: #475569;
+    --color-slate-400: #334155;
+    --color-slate-300: #1e293b;
+    --color-slate-200: #0f172a;
+    --color-slate-100: #0f172a;
+    --color-slate-50: #0f172a;
+    --color-white: #0f172a;
+  }
+}
+@media (prefers-color-scheme: dark) {
+  html[data-theme="system"] {
+    --background: #090d16;
+    --foreground: #f8fafc;
+    --card-bg: rgba(15, 23, 42, 0.45);
+    --card-border: rgba(30, 41, 59, 0.8);
+    --sidebar-bg: #0b0f19;
+    --input-bg: rgba(2, 6, 23, 0.8);
+    --primary: #a855f7;
+    --primary-hover: #9333ea;
+    --accent: #ec4899;
+  }
+}
+
+body {
+  background-color: var(--color-slate-950);
+  color: var(--color-slate-200);
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  min-height: 100vh;
+}
+
+

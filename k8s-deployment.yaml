@@ -1,0 +1,188 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: k6-stratum-portal
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: k6-stratum-portal-sa
+  namespace: k6-stratum-portal
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: k6-stratum-portal-role
+rules:
+  # Permissions to manage K6 Custom Resources (both old and new CRDs)
+  - apiGroups: ["k6.io"]
+    resources: ["k6s", "testruns"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+  # Permissions to read and write ConfigMaps (where K6 test scripts are saved with labels)
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Permissions to list namespaces on EKS to populate namespace selector
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k6-stratum-portal-role-binding
+subjects:
+  - kind: ServiceAccount
+    name: k6-stratum-portal-sa
+    namespace: k6-stratum-portal
+roleRef:
+  kind: ClusterRole
+  name: k6-stratum-portal-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: k6-portal-sqlite-pvc
+  namespace: k6-stratum-portal
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k6-stratum-portal-backend
+  namespace: k6-stratum-portal
+  labels:
+    app: k6-stratum-portal-backend
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # Required to safely release SQLite lock on pod replacement
+  selector:
+    matchLabels:
+      app: k6-stratum-portal-backend
+  template:
+    metadata:
+      labels:
+        app: k6-stratum-portal-backend
+    spec:
+      serviceAccountName: k6-stratum-portal-sa
+      containers:
+        - name: backend
+          image: k6-bedrock-dashboard-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: api
+          env:
+            - name: PORT
+              value: "8080"
+            - name: DATABASE_PATH
+              value: "/data/dashboard.db"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dashboard-secrets
+                  key: jwt-secret
+            - name: ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: dashboard-secrets
+                  key: encryption-key
+          volumeMounts:
+            - name: sqlite-storage
+              mountPath: /data
+      volumes:
+        - name: sqlite-storage
+          persistentVolumeClaim:
+            claimName: k6-portal-sqlite-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: k6-stratum-portal-backend-service
+  namespace: k6-stratum-portal
+spec:
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+      name: http
+  selector:
+    app: k6-stratum-portal-backend
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k6-stratum-portal-frontend
+  namespace: k6-stratum-portal
+  labels:
+    app: k6-stratum-portal-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: k6-stratum-portal-frontend
+  template:
+    metadata:
+      labels:
+        app: k6-stratum-portal-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: k6-bedrock-dashboard-frontend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              name: web
+          env:
+            - name: PORT
+              value: "3000"
+            - name: BACKEND_URL
+              value: "http://k6-stratum-portal-backend-service:8080"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: k6-stratum-portal-frontend-service
+  namespace: k6-stratum-portal
+spec:
+  ports:
+    - port: 80
+      targetPort: 3000
+      protocol: TCP
+      name: http
+  selector:
+    app: k6-stratum-portal-frontend
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: k6-stratum-portal-ingress
+  namespace: k6-stratum-portal
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  tls:
+    - hosts:
+        - k6-portal.local
+      secretName: k6-portal-tls
+  rules:
+    - host: k6-portal.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: k6-stratum-portal-frontend-service
+                port:
+                  number: 80
