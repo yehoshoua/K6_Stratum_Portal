@@ -14,7 +14,8 @@ import {
   Sun,
   Moon,
   Monitor,
-  Globe
+  Globe,
+  Clock
 } from 'lucide-react';
 import { api } from '@/services/api';
 import { usePreferences, Language, Theme } from './PreferencesContext';
@@ -41,6 +42,7 @@ export default function Sidebar() {
     { name: t('k8sClusters'), href: '/clusters', icon: HardDrive },
     { name: t('crdControl'), href: '/crds', icon: Layers },
     { name: t('influxdb'), href: '/metrics', icon: BarChart3 },
+    { name: t('schedules'), href: '/schedules', icon: Clock },
   ];
 
   // Dynamically append Settings menu if administrator

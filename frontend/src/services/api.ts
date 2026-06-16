@@ -31,6 +31,7 @@ export interface ClusterConfig {
   kubernetes_version?: string;
   region?: string;
   namespaces?: string;
+  k6_operator_installed?: boolean;
 }
 
 export interface InfluxServerConfig {
@@ -59,6 +60,36 @@ export interface K6Template {
   mem_limit: string;
   script_content: string;
   created_at: string;
+  sla_thresholds?: string;
+}
+
+export interface TestSchedule {
+  id?: number;
+  name: string;
+  cluster_id: string;
+  namespace: string;
+  template_id: string;
+  cron_expression: string;
+  active: boolean;
+  created_at?: string;
+}
+
+export interface K6Report {
+  key: string;
+  cluster_id: string;
+  namespace: string;
+  template_id: string;
+  run_name: string;
+  timestamp: number;
+}
+
+export interface TestAlert {
+  id: number;
+  test_run_id: string;
+  metric: string;
+  threshold: string;
+  value: number;
+  timestamp: string;
 }
 
 export interface User {
@@ -78,6 +109,15 @@ export interface SSOConfig {
   editor_groups?: string;
 }
 
+export interface APIToken {
+  token_hash: string;
+  name: string;
+  role: string;
+  created_at: string;
+  expires_at?: string;
+  token?: string;
+}
+
 
 
 export interface K6CRD {
@@ -94,12 +134,19 @@ export interface K6CRD {
   };
 }
 
+export interface K8sPod {
+  name: string;
+  status: string;
+}
+
 export interface TestRunSummary {
   test_run_id: string;
   start_time: string;
   duration_seconds: number;
   max_vus: number;
   avg_req_duration_ms: number;
+  cluster?: string;
+  namespace?: string;
 }
 
 export interface TelemetryPoint {
@@ -200,6 +247,45 @@ export const api = {
     return res.json();
   },
 
+  async getConfigMap(clusterId: string, name: string, namespace = 'default'): Promise<{ name: string; namespace?: string; data: Record<string, string> }> {
+    const res = await apiFetch(`${BASE_URL}/k8s/clusters/${clusterId}/configmaps/${name}?namespace=${namespace}`, { headers: getHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch ConfigMap');
+    return res.json();
+  },
+
+  async listConfigMaps(clusterId: string, namespace = 'default'): Promise<{ name: string; namespace?: string; data: Record<string, string> }[]> {
+    const res = await apiFetch(`${BASE_URL}/k8s/clusters/${clusterId}/configmaps?namespace=${namespace}`, { headers: getHeaders() });
+    if (!res.ok) throw new Error('Failed to list ConfigMaps');
+    return res.json();
+  },
+
+  async deleteConfigMap(clusterId: string, name: string, namespace = 'default'): Promise<void> {
+    const res = await apiFetch(`${BASE_URL}/k8s/clusters/${clusterId}/configmaps/${name}?namespace=${namespace}`, {
+      method: 'DELETE',
+      headers: getHeaders(),
+    });
+    if (!res.ok) throw new Error('Failed to delete ConfigMap');
+  },
+
+  async createConfigMap(clusterId: string, namespace = 'default', body: { name: string; fileName: string; scriptContent: string }): Promise<{ name: string; data: Record<string, string> }> {
+    const res = await apiFetch(`${BASE_URL}/k8s/clusters/${clusterId}/configmaps?namespace=${namespace}`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error('Failed to create ConfigMap');
+    return res.json();
+  },
+
+  async updateConfigMap(clusterId: string, name: string, data: Record<string, string>, namespace = 'default'): Promise<void> {
+    const res = await apiFetch(`${BASE_URL}/k8s/clusters/${clusterId}/configmaps/${name}?namespace=${namespace}`, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify({ data }),
+    });
+    if (!res.ok) throw new Error('Failed to update ConfigMap');
+  },
+
   async getOperatorStatus(): Promise<{ status: 'ready' | 'degraded' | 'unavailable'; accessible_count: number; deployed_count: number; total_count: number }> {
     const res = await apiFetch(`${BASE_URL}/k8s/operator-status`, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to fetch operator status');
@@ -247,8 +333,28 @@ export const api = {
     return res.json();
   },
 
-  async getRunMetrics(runId: string, metric: 'vus' | 'http_req_duration', range = '1h'): Promise<TelemetryPoint[]> {
-    const res = await apiFetch(`${BASE_URL}/influx/runs/${runId}/metrics?metric=${metric}&range=${range}`, { headers: getHeaders() });
+  async getRunMetrics(
+    runId: string, 
+    metric: 'vus' | 'http_req_duration' | 'error_rate', 
+    range = '1h',
+    start?: string,
+    stop?: string,
+    cluster?: string,
+    namespace?: string
+  ): Promise<TelemetryPoint[]> {
+    let url = `${BASE_URL}/influx/runs/${runId}/metrics?metric=${metric}`;
+    if (start && stop) {
+      url += `&start=${encodeURIComponent(start)}&stop=${encodeURIComponent(stop)}`;
+    } else {
+      url += `&range=${range}`;
+    }
+    if (cluster) {
+      url += `&cluster=${encodeURIComponent(cluster)}`;
+    }
+    if (namespace) {
+      url += `&namespace=${encodeURIComponent(namespace)}`;
+    }
+    const res = await apiFetch(url, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to fetch run metrics');
     return res.json();
   },
@@ -469,6 +575,136 @@ export const api = {
     localStorage.setItem('username', data.username);
     localStorage.setItem('role', data.role);
     return data;
+  },
+
+  // API Tokens
+  async getAPITokens(): Promise<APIToken[]> {
+    const res = await apiFetch(`${BASE_URL}/settings/tokens`, { headers: getHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch API tokens');
+    return res.json();
+  },
+
+  async createAPIToken(name: string, role: string, expiryDays: number): Promise<APIToken> {
+    const res = await apiFetch(`${BASE_URL}/settings/tokens`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ name, role, expiry_days: expiryDays }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to generate API token' }));
+      throw new Error(err.error || 'Failed to generate API token');
+    }
+    return res.json();
+  },
+
+  async deleteAPIToken(tokenHash: string): Promise<void> {
+    const res = await apiFetch(`${BASE_URL}/settings/tokens/${tokenHash}`, {
+      method: 'DELETE',
+      headers: getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to delete API token' }));
+      throw new Error(err.error || 'Failed to delete API token');
+    }
+  },
+
+  // CRD Relaunch
+  async relaunchCRD(clusterId: string, name: string, namespace: string): Promise<any> {
+    const res = await apiFetch(`${BASE_URL}/k8s/clusters/${clusterId}/crds/${name}/relaunch?namespace=${namespace}`, {
+      method: 'POST',
+      headers: getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to relaunch test' }));
+      throw new Error(err.error || 'Failed to relaunch test');
+    }
+    return res.json();
+  },
+
+  // Schedules CRUD
+  async getSchedules(): Promise<TestSchedule[]> {
+    const res = await apiFetch(`${BASE_URL}/settings/schedules`, { headers: getHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch schedules');
+    return res.json();
+  },
+
+  async createSchedule(schedule: Omit<TestSchedule, 'id' | 'created_at'>): Promise<TestSchedule> {
+    const res = await apiFetch(`${BASE_URL}/settings/schedules`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(schedule),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to create schedule' }));
+      throw new Error(err.error || 'Failed to create schedule');
+    }
+    return res.json();
+  },
+
+  async deleteSchedule(id: number): Promise<void> {
+    const res = await apiFetch(`${BASE_URL}/settings/schedules/${id}`, {
+      method: 'DELETE',
+      headers: getHeaders(),
+    });
+    if (!res.ok) throw new Error('Failed to delete schedule');
+  },
+
+  async runSchedule(id: number): Promise<{ success: boolean }> {
+    const res = await apiFetch(`${BASE_URL}/settings/schedules/${id}/run`, {
+      method: 'POST',
+      headers: getHeaders()
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to trigger schedule');
+    }
+    return res.json();
+  },
+
+  async toggleSchedule(id: number): Promise<TestSchedule> {
+    const res = await apiFetch(`${BASE_URL}/settings/schedules/${id}/toggle`, {
+      method: 'POST',
+      headers: getHeaders(),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to toggle schedule status');
+    }
+    return res.json();
+  },
+
+  async getReports(): Promise<K6Report[]> {
+    const res = await apiFetch(`${BASE_URL}/reports`, { headers: getHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch reports');
+    return res.json();
+  },
+
+  // SLA Alerts
+  async getAlerts(): Promise<TestAlert[]> {
+    const res = await apiFetch(`${BASE_URL}/influx/alerts`, { headers: getHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch SLA alerts');
+    return res.json();
+  },
+
+  // Pod Logs
+  async getPodLogs(clusterId: string, podName: string, namespace: string, follow = false): Promise<string> {
+    const res = await apiFetch(`${BASE_URL}/k8s/clusters/${clusterId}/pods/${podName}/logs?namespace=${namespace}&follow=${follow}`, { headers: getHeaders() });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      try {
+        const json = JSON.parse(errText);
+        throw new Error(json.error || json.message || 'Failed to fetch pod logs');
+      } catch {
+        throw new Error(errText || 'Failed to fetch pod logs');
+      }
+    }
+    return res.text();
+  },
+
+  async listPods(clusterId: string, namespace: string): Promise<K8sPod[]> {
+    const res = await apiFetch(`${BASE_URL}/k8s/clusters/${clusterId}/pods?namespace=${namespace}`, { headers: getHeaders() });
+    if (!res.ok) throw new Error('Failed to list pods');
+    return res.json();
   },
 };
 

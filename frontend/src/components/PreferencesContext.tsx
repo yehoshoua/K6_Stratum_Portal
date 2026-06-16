@@ -4,21 +4,48 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 
 export type Language = 'en' | 'fr' | 'he' | 'zh';
 export type Theme = 'light' | 'dark' | 'system';
+export type ColorPalette = 'default' | 'ocean-blue' | 'gradient-blues' | 'blue-serenity' | 'golden-harvest' | string;
+
+export interface CustomPalette {
+  id: string;
+  name: string;
+  colors: {
+    primary: string;
+    primaryHover: string;
+    primaryLight: string;
+    primaryLightest: string;
+    primaryDark: string;
+    accent: string;
+    accentHover: string;
+    accentLight: string;
+    accentLightest: string;
+    accentDark: string;
+    backgroundDark: string;
+    backgroundLight: string;
+  };
+}
 
 interface PreferencesContextType {
   lang: Language;
   theme: Theme;
+  colorPalette: ColorPalette;
   setLang: (lang: Language) => void;
   setTheme: (theme: Theme) => void;
+  setColorPalette: (palette: ColorPalette) => void;
+  customPalettes: CustomPalette[];
+  addCustomPalette: (palette: CustomPalette) => void;
+  deleteCustomPalette: (id: string) => void;
   t: (key: string) => string;
 }
 
 const translations = {
   en: {
     dashboard: "Dashboard",
+    reports: "Reports",
     k8sClusters: "K8s Clusters",
     crdControl: "K6 Operator CRDs",
     influxdb: "InfluxDB Analytics",
+    schedules: "Schedules",
     settings: "Settings",
     logout: "Log out",
     connected: "Connected",
@@ -81,6 +108,16 @@ const translations = {
     jsFile: "JS File",
     cpuLimit: "CPU Limit",
     memLimit: "RAM Limit",
+    scriptSource: "Script Configuration Method",
+    manualScript: "Write script manually",
+    existingScript: "Use existing ConfigMap",
+    selectConfigMap: "Select Script ConfigMap",
+    newConfigMap: "New ConfigMap",
+    configMapName: "ConfigMap Name",
+    jsFileName: "JS File Name",
+    cmContent: "Initial JS Script",
+    creatingConfigMap: "Creating...",
+    duplicateFrom: "Duplicate from existing (Optional)",
     deploying: "Deploying...",
     deploy: "Deploy",
     clustersK8s: "K8s Clusters",
@@ -116,6 +153,7 @@ const translations = {
     metricsSub: "Visualize historical load runs and track http request rates and user counts.",
     metricRateToggle: "Latency (http_req_duration)",
     metricVUsToggle: "Active Users (vus)",
+    metricErrorToggle: "Error Rate (http_req_failed)",
     valMax: "Peak Value",
     valAvg: "Average",
     valMin: "Minimum",
@@ -129,12 +167,67 @@ const translations = {
     influxSettingsError: "Failed to update InfluxDB configuration.",
     k8sSettingsError: "Failed to save cluster configuration.",
     k8sLoadError: "Failed to load Kubernetes clusters.",
+    deleteClusterTitle: "Delete Kubernetes Cluster",
+    deleteClusterConfirmPrefix: "Are you sure you want to delete the K8S Cluster",
+    deleteClusterConfirmSuffix: "?",
+    deleteClusterWarning: "This action cannot be undone. This will permanently delete the cluster connection and remove it from your dashboard settings.",
+    deleteClusterTypePrompt: "Please type the cluster name to confirm:",
+    deleteTemplateTitle: "Delete Template",
+    deleteTemplateConfirm: "Are you sure you want to delete the template \"{name}\"?",
+    deleteUserTitle: "Delete User",
+    deleteUserConfirm: "Are you sure you want to delete the user \"{name}\"?",
+    cannotDeleteAdmin: "Cannot delete the main admin account.",
+    apiTokens: "API Tokens",
+    generateToken: "Generate Token",
+    tokenName: "Token Name",
+    expiry: "Expiration",
+    role: "Role",
+    create: "Create",
+    never: "Never",
+    days7: "7 Days",
+    days30: "30 Days",
+    days90: "90 Days",
+    createdAt: "Created At",
+    expiresAt: "Expires At",
+    tokenCopied: "Token copied to clipboard!",
+    copy: "Copy",
+    tokenNotice: "Save this token now! It will not be shown again.",
+    deleteTokenTitle: "Delete API Token",
+    deleteTokenConfirm: "Are you sure you want to delete the API Token \"{name}\"?",
+    colorPalette: "Color Palette",
+    paletteDefault: "Purple & Pink (Default)",
+    paletteOceanBlue: "Ocean Blue Serenity",
+    paletteGradientBlues: "Gradient Blues",
+    paletteBlueSerenity: "Blue Serenity",
+    paletteGoldenHarvest: "Golden Harvest",
+    addCustomPalette: "+ Add Custom Palette",
+    customPaletteTitle: "Add Custom Palette",
+    editCustomPalette: "Edit Custom Palette",
+    edit: "Edit",
+    paletteName: "Palette Name",
+    primaryColor: "Primary Color",
+    primaryHover: "Primary Hover",
+    primaryLight: "Primary Light",
+    primaryLightest: "Primary Lightest",
+    primaryDark: "Primary Dark",
+    accentColor: "Accent Color",
+    accentHover: "Accent Hover",
+    accentLight: "Accent Light",
+    accentLightest: "Accent Lightest",
+    accentDark: "Accent Dark",
+    backgroundDark: "Dark Background Color",
+    backgroundLight: "Light Background Color",
+    createPalette: "Create Palette",
+    deletePaletteTitle: "Delete Custom Palette",
+    deletePaletteConfirm: "Are you sure you want to delete the custom palette \"{name}\"?",
   },
   fr: {
     dashboard: "Tableau de bord",
+    reports: "Rapports",
     k8sClusters: "Clusters K8s",
     crdControl: "CRDs K6 Operator",
     influxdb: "Analyses InfluxDB",
+    schedules: "Planifications",
     settings: "Paramètres",
     logout: "Se déconnecter",
     connected: "Connecté",
@@ -197,6 +290,16 @@ const translations = {
     jsFile: "Fichier JS",
     cpuLimit: "Limites CPU",
     memLimit: "Limites RAM",
+    scriptSource: "Méthode de configuration du script",
+    manualScript: "Écrire le script manuellement",
+    existingScript: "Utiliser une ConfigMap existante",
+    selectConfigMap: "Sélectionner la ConfigMap du Script",
+    newConfigMap: "Nouvelle ConfigMap",
+    configMapName: "Nom de la ConfigMap",
+    jsFileName: "Nom du fichier JS",
+    cmContent: "Script JS Initial",
+    creatingConfigMap: "Création...",
+    duplicateFrom: "Dupliquer depuis l'existant (Optionnel)",
     deploying: "Déploiement...",
     deploy: "Déployer",
     clustersK8s: "Clusters K8s",
@@ -232,6 +335,7 @@ const translations = {
     metricsSub: "Visualisez les performances historiques et suivez l'évolution des requêtes HTTP et de la charge utilisateurs.",
     metricRateToggle: "Latence (http_req_duration)",
     metricVUsToggle: "Utilisateurs (vus)",
+    metricErrorToggle: "Taux d'erreur (http_req_failed)",
     valMax: "Valeur Maximale",
     valAvg: "Moyenne",
     valMin: "Valeur Minimale",
@@ -245,12 +349,67 @@ const translations = {
     influxSettingsError: "Échec de la mise à jour de la configuration InfluxDB.",
     k8sSettingsError: "Échec de la configuration du cluster.",
     k8sLoadError: "Échec du chargement des clusters Kubernetes.",
+    deleteClusterTitle: "Supprimer le Cluster Kubernetes",
+    deleteClusterConfirmPrefix: "Êtes-vous sûr de vouloir supprimer le cluster K8S",
+    deleteClusterConfirmSuffix: " ?",
+    deleteClusterWarning: "Cette action est irréversible. Cela supprimera définitivement la connexion au cluster et la retirera des paramètres de votre tableau de bord.",
+    deleteClusterTypePrompt: "Veuillez saisir le nom du cluster pour confirmer :",
+    deleteTemplateTitle: "Supprimer le modèle",
+    deleteTemplateConfirm: "Êtes-vous sûr de vouloir supprimer le modèle \"{name}\" ?",
+    deleteUserTitle: "Supprimer l'utilisateur",
+    deleteUserConfirm: "Êtes-vous sûr de vouloir supprimer l'utilisateur \"{name}\" ?",
+    cannotDeleteAdmin: "Impossible de supprimer le compte administrateur principal.",
+    apiTokens: "Tokens API",
+    generateToken: "Générer un token",
+    tokenName: "Nom du token",
+    expiry: "Expiration",
+    role: "Rôle",
+    create: "Créer",
+    never: "Jamais",
+    days7: "7 Jours",
+    days30: "30 Jours",
+    days90: "90 Jours",
+    createdAt: "Créé le",
+    expiresAt: "Expire le",
+    tokenCopied: "Token copié dans le presse-papiers !",
+    copy: "Copier",
+    tokenNotice: "Enregistrez ce token maintenant ! Il ne sera plus affiché.",
+    deleteTokenTitle: "Supprimer le token API",
+    deleteTokenConfirm: "Êtes-vous sûr de vouloir supprimer le token API \"{name}\" ?",
+    colorPalette: "Palette de Couleurs",
+    paletteDefault: "Violet & Rose (Défaut)",
+    paletteOceanBlue: "Bleu Océan Sérénité",
+    paletteGradientBlues: "Dégradés de Bleu",
+    paletteBlueSerenity: "Bleu Sérénité",
+    paletteGoldenHarvest: "Moisson Dorée",
+    addCustomPalette: "+ Palette personnalisée",
+    customPaletteTitle: "Ajouter une palette personnalisée",
+    editCustomPalette: "Modifier la palette personnalisée",
+    edit: "Modifier",
+    paletteName: "Nom de la palette",
+    primaryColor: "Couleur principale",
+    primaryHover: "Survol principal",
+    primaryLight: "Clair principal",
+    primaryLightest: "Très clair principal",
+    primaryDark: "Sombre principal",
+    accentColor: "Couleur d'accent",
+    accentHover: "Survol d'accent",
+    accentLight: "Clair d'accent",
+    accentLightest: "Très clair d'accent",
+    accentDark: "Sombre d'accent",
+    backgroundDark: "Couleur de fond sombre",
+    backgroundLight: "Couleur de fond claire",
+    createPalette: "Créer la palette",
+    deletePaletteTitle: "Supprimer la palette personnalisée",
+    deletePaletteConfirm: "Êtes-vous sûr de vouloir supprimer la palette personnalisée \"{name}\" ?",
   },
   he: {
     dashboard: "לוח בקרה",
+    reports: "דוחות",
     k8sClusters: "K8s Clusters",
     crdControl: "CRDs של K6 Operator",
     influxdb: "אנליטיקת InfluxDB",
+    schedules: "תזמונים",
     settings: "הגדרות",
     logout: "התנתק",
     connected: "מחובר",
@@ -313,6 +472,16 @@ const translations = {
     jsFile: "קובץ JS",
     cpuLimit: "מגבלת CPU",
     memLimit: "מגבלת RAM",
+    scriptSource: "שיטת הגדרת הסקריפט",
+    manualScript: "כתיבת סקריפט ידנית",
+    existingScript: "שימוש ב-ConfigMap קיים",
+    selectConfigMap: "בחר ConfigMap של סקריפט",
+    newConfigMap: "ConfigMap חדש",
+    configMapName: "שם ה-ConfigMap",
+    jsFileName: "שם קובץ JS",
+    cmContent: "סקריפט JS ראשוני",
+    creatingConfigMap: "יוצר...",
+    duplicateFrom: "שכפול מתוך קיים (אופציונלי)",
     deploying: "פורס...",
     deploy: "פרוס בדיקה",
     clustersK8s: "K8s Clusters",
@@ -348,6 +517,7 @@ const translations = {
     metricsSub: "צפה בהרצות ביצועים היסטוריות ועקוב אחר קצב בקשות HTTP וכמות משתמשים.",
     metricRateToggle: "זמן תגובה (http_req_duration)",
     metricVUsToggle: "משתמשים פעילים (vus)",
+    metricErrorToggle: "שיעור שגיאות (http_req_failed)",
     valMax: "ערך שיא",
     valAvg: "ממוצע",
     valMin: "מינימום",
@@ -361,12 +531,67 @@ const translations = {
     influxSettingsError: "עדכון הגדרות InfluxDB נכשל.",
     k8sSettingsError: "שמירת הגדרות האשכול נכשלה.",
     k8sLoadError: "טעינת אשכולות קיברנטיס נכשלה.",
+    deleteClusterTitle: "מחיקת אשכול קיברנטיס",
+    deleteClusterConfirmPrefix: "האם אתה בטוח שברצונך למחוק את אשכול ה-K8S",
+    deleteClusterConfirmSuffix: "?",
+    deleteClusterWarning: "פעולה זו אינה הפיכה. היא תמחק לצמיתות את החיבור לאשכול ותסיר אותו מהגדרות לוח הבקרה.",
+    deleteClusterTypePrompt: "אנא הקלד את שם האשכול כדי לאשר:",
+    deleteTemplateTitle: "מחיקת תבנית",
+    deleteTemplateConfirm: "האם אתה בטוח שברצונך למחוק את התבנית \"{name}\"?",
+    deleteUserTitle: "מחיקת משתמש",
+    deleteUserConfirm: "האם אתה בטוח שברצונך למחוק את המשתמש \"{name}\"?",
+    cannotDeleteAdmin: "לא ניתן למחוק את חשבון המנהל הראשי.",
+    apiTokens: "אסימוני API",
+    generateToken: "צור אסימון",
+    tokenName: "שם האסימון",
+    expiry: "תפוגה",
+    role: "תפקיד",
+    create: "צור",
+    never: "אף פעם",
+    days7: "7 ימים",
+    days30: "30 ימים",
+    days90: "90 ימים",
+    createdAt: "נוצר ב-",
+    expiresAt: "פג ב-",
+    tokenCopied: "האסימון הועתק ללוח!",
+    copy: "העתק",
+    tokenNotice: "שמור אסימון זה כעת! הוא לא יוצג שוב.",
+    deleteTokenTitle: "מחק אסימון API",
+    deleteTokenConfirm: "האם אתה בטוח שברצונך למחוק את אסימון ה-API \"{name}\"?",
+    colorPalette: "פלטת צבעים",
+    paletteDefault: "סגול וורוד (ברירת מחדל)",
+    paletteOceanBlue: "שלוות כחול אוקיינוס",
+    paletteGradientBlues: "כחולים מדורגים",
+    paletteBlueSerenity: "שלווה כחולה",
+    paletteGoldenHarvest: "קציר הזהב",
+    addCustomPalette: "+ הוסף פלטה מותאמת אישית",
+    customPaletteTitle: "הוסף פלטה מותאמת אישית",
+    editCustomPalette: "ערוך פלטה מותאמת אישית",
+    edit: "ערוך",
+    paletteName: "שם הפלטה",
+    primaryColor: "צבע ראשי",
+    primaryHover: "צבע מעבר ראשי",
+    primaryLight: "צבע בהיר ראשי",
+    primaryLightest: "צבע בהיר ביותר ראשי",
+    primaryDark: "צבע כהה ראשי",
+    accentColor: "צבע הדגשה",
+    accentHover: "צבע מעבר הדגשה",
+    accentLight: "צבע בהיר הדגשה",
+    accentLightest: "צבע בהיר ביותר הדגשה",
+    accentDark: "צבע כהה הדגשה",
+    backgroundDark: "צבע רקע כהה",
+    backgroundLight: "צבע רקע בהיר",
+    createPalette: "צור פלטה",
+    deletePaletteTitle: "מחק פלטה מותאמת אישית",
+    deletePaletteConfirm: "האם אתה בטוח שברצונך למחוק את הפלטה המותאמת אישית \"{name}\"?",
   },
   zh: {
     dashboard: "仪表板",
+    reports: "报告",
     k8sClusters: "K8s 集群",
     crdControl: "K6 算子 CRD",
     influxdb: "InfluxDB 分析",
+    schedules: "计划任务",
     settings: "设置",
     logout: "登出",
     connected: "已连接",
@@ -429,6 +654,16 @@ const translations = {
     jsFile: "JS 脚本文件",
     cpuLimit: "CPU 限制",
     memLimit: "内存限制",
+    scriptSource: "脚本配置方式",
+    manualScript: "手动编写脚本",
+    existingScript: "使用现有 ConfigMap",
+    selectConfigMap: "选择脚本 ConfigMap",
+    newConfigMap: "新建 ConfigMap",
+    configMapName: "ConfigMap 名称",
+    jsFileName: "JS 文件名称",
+    cmContent: "初始 JS 脚本",
+    creatingConfigMap: "创建中...",
+    duplicateFrom: "从现有复制 (可选)",
     deploying: "部署中...",
     deploy: "部署测试",
     clustersK8s: "K8s 集群",
@@ -464,6 +699,7 @@ const translations = {
     metricsSub: "可视化历史测试运行，跟踪 HTTP 请求速率和活跃用户数。",
     metricRateToggle: "请求延迟 (http_req_duration)",
     metricVUsToggle: "活跃用户数 (vus)",
+    metricErrorToggle: "错误率 (http_req_failed)",
     valMax: "峰值",
     valAvg: "平均值",
     valMin: "最小值",
@@ -477,22 +713,183 @@ const translations = {
     influxSettingsError: "更新 InfluxDB 配置失败。",
     k8sSettingsError: "保存集群配置失败。",
     k8sLoadError: "加载 Kubernetes 集群失败。",
+    deleteClusterTitle: "删除 Kubernetes 集群",
+    deleteClusterConfirmPrefix: "您确定要删除 K8S 集群",
+    deleteClusterConfirmSuffix: "吗？",
+    deleteClusterWarning: "此操作无法撤销。这将永久删除集群连接并从您的仪表板设置中移除。",
+    deleteClusterTypePrompt: "请输入集群名称以进行确认：",
+    deleteTemplateTitle: "删除模板",
+    deleteTemplateConfirm: "您确定要删除模板 \"{name}\" 吗？",
+    deleteUserTitle: "删除用户",
+    deleteUserConfirm: "您确定要删除用户 \"{name}\" 吗？",
+    cannotDeleteAdmin: "无法删除主管理员账户。",
+    apiTokens: "API 令牌",
+    generateToken: "生成令牌",
+    tokenName: "令牌名称",
+    expiry: "有效期",
+    role: "角色",
+    create: "生成",
+    never: "永不过期",
+    days7: "7 天",
+    days30: "30 天",
+    days90: "90 天",
+    createdAt: "创建于",
+    expiresAt: "过期时间",
+    tokenCopied: "令牌已复制到剪贴板！",
+    copy: "复制",
+    tokenNotice: "请立即保存此令牌！它将不再显示。",
+    deleteTokenTitle: "删除 API 令牌",
+    deleteTokenConfirm: "确定要删除 API 令牌 \"{name}\" 吗？",
+    colorPalette: "色彩调色板",
+    paletteDefault: "紫与粉 (默认)",
+    paletteOceanBlue: "海洋之蓝 (Ocean Blue Serenity)",
+    paletteGradientBlues: "渐变之蓝 (Gradient Blues)",
+    paletteBlueSerenity: "宁静之蓝 (Blue Serenity)",
+    paletteGoldenHarvest: "金色麦浪 (Golden Harvest)",
+    addCustomPalette: "+ 添加自定义调色板",
+    customPaletteTitle: "添加自定义调色板",
+    editCustomPalette: "编辑自定义调色板",
+    edit: "编辑",
+    paletteName: "调色板名称",
+    primaryColor: "主色",
+    primaryHover: "主色悬停",
+    primaryLight: "主色浅色",
+    primaryLightest: "主色最浅色",
+    primaryDark: "主色深色",
+    accentColor: "强调色",
+    accentHover: "强调色悬停",
+    accentLight: "强调色浅色",
+    accentLightest: "强调色最浅色",
+    accentDark: "强调色深色",
+    backgroundDark: "深色背景颜色",
+    backgroundLight: "浅色背景颜色",
+    createPalette: "创建调色板",
+    deletePaletteTitle: "删除自定义调色板",
+    deletePaletteConfirm: "确定要删除自定义调色板 \"{name}\" 吗？",
   }
 };
+export const defaultPalettes: CustomPalette[] = [
+  {
+    id: 'default',
+    name: 'paletteDefault',
+    colors: {
+      primary: '#a855f7',
+      primaryHover: '#9333ea',
+      primaryLight: '#c084fc',
+      primaryLightest: '#e9d5ff',
+      primaryDark: '#581c87',
+      accent: '#ec4899',
+      accentHover: '#db2777',
+      accentLight: '#f472b6',
+      accentLightest: '#fbcfe8',
+      accentDark: '#831843',
+      backgroundDark: '#090d16',
+      backgroundLight: '#f1f5f9'
+    }
+  },
+  {
+    id: 'ocean-blue',
+    name: 'paletteOceanBlue',
+    colors: {
+      primary: '#0077b6',
+      primaryHover: '#023e8a',
+      primaryLight: '#00b4d8',
+      primaryLightest: '#90e0ef',
+      primaryDark: '#03045e',
+      accent: '#00b4d8',
+      accentHover: '#0077b6',
+      accentLight: '#90e0ef',
+      accentLightest: '#caf0f8',
+      accentDark: '#023e8a',
+      backgroundDark: '#090d16',
+      backgroundLight: '#f1f5f9'
+    }
+  },
+  {
+    id: 'gradient-blues',
+    name: 'paletteGradientBlues',
+    colors: {
+      primary: '#0a9396',
+      primaryHover: '#005f73',
+      primaryLight: '#94d2bd',
+      primaryLightest: '#cae9e0',
+      primaryDark: '#003d4c',
+      accent: '#94d2bd',
+      accentHover: '#0a9396',
+      accentLight: '#cae9e0',
+      accentLightest: '#e9d8a6',
+      accentDark: '#005f73',
+      backgroundDark: '#090d16',
+      backgroundLight: '#f1f5f9'
+    }
+  },
+  {
+    id: 'blue-serenity',
+    name: 'paletteBlueSerenity',
+    colors: {
+      primary: '#3a76b0',
+      primaryHover: '#1e4f8c',
+      primaryLight: '#a7c6ed',
+      primaryLightest: '#d7e3fc',
+      primaryDark: '#112244',
+      accent: '#a7c6ed',
+      accentHover: '#3a76b0',
+      accentLight: '#d7e3fc',
+      accentLightest: '#edf2fb',
+      accentDark: '#1a365d',
+      backgroundDark: '#090d16',
+      backgroundLight: '#f1f5f9'
+    }
+  },
+  {
+    id: 'golden-harvest',
+    name: 'paletteGoldenHarvest',
+    colors: {
+      primary: '#edc531',
+      primaryHover: '#a47e1b',
+      primaryLight: '#ffe169',
+      primaryLightest: '#fbf6cf',
+      primaryDark: '#5d4508',
+      accent: '#ffe169',
+      accentHover: '#edc531',
+      accentLight: '#fbf6cf',
+      accentLightest: '#fffae0',
+      accentDark: '#7a5a0c',
+      backgroundDark: '#090d16',
+      backgroundLight: '#f1f5f9'
+    }
+  }
+];
 
 const PreferencesContext = createContext<PreferencesContextType | undefined>(undefined);
 
 export function PreferencesProvider({ children }: { children: React.ReactNode }) {
   const [lang, setLangState] = useState<Language>('en');
-  const [theme, setThemeState] = useState<Theme>('dark');
+  const [theme, setThemeState] = useState<Theme>('system');
+  const [colorPalette, setColorPaletteState] = useState<ColorPalette>('default');
+  const [customPalettes, setCustomPalettes] = useState<CustomPalette[]>([]);
 
   // Load from local storage
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const savedLang = localStorage.getItem('pref-lang') as Language;
       const savedTheme = localStorage.getItem('pref-theme') as Theme;
+      const savedPalette = localStorage.getItem('pref-palette') as ColorPalette;
+      const savedCustom = localStorage.getItem('pref-custom-palettes');
       if (savedLang) setLangState(savedLang);
       if (savedTheme) setThemeState(savedTheme);
+      if (savedPalette) setColorPaletteState(savedPalette);
+      if (savedCustom) {
+        try {
+          setCustomPalettes(JSON.parse(savedCustom));
+        } catch (e) {
+          console.error('Failed to parse custom palettes', e);
+          setCustomPalettes(defaultPalettes);
+        }
+      } else {
+        setCustomPalettes(defaultPalettes);
+        localStorage.setItem('pref-custom-palettes', JSON.stringify(defaultPalettes));
+      }
     }
   }, []);
 
@@ -506,6 +903,31 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     localStorage.setItem('pref-theme', newTheme);
   };
 
+  const setColorPalette = (newPalette: ColorPalette) => {
+    setColorPaletteState(newPalette);
+    localStorage.setItem('pref-palette', newPalette);
+  };
+
+  const addCustomPalette = (palette: CustomPalette) => {
+    setCustomPalettes((prev) => {
+      const updated = [...prev.filter((p) => p.id !== palette.id), palette];
+      localStorage.setItem('pref-custom-palettes', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const deleteCustomPalette = (id: string) => {
+    setCustomPalettes((prev) => {
+      const updated = prev.filter((p) => p.id !== id);
+      localStorage.setItem('pref-custom-palettes', JSON.stringify(updated));
+      if (colorPalette === id) {
+        const nextPalette = updated.length > 0 ? updated[0].id : 'default';
+        setTimeout(() => setColorPalette(nextPalette), 0);
+      }
+      return updated;
+    });
+  };
+
   // Sync theme with document element attribute
   useEffect(() => {
     const root = document.documentElement;
@@ -516,13 +938,80 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     }
   }, [theme]);
 
+  // Sync color palette with document element attribute & inject dynamic colors if custom
+  useEffect(() => {
+    const root = document.documentElement;
+    root.setAttribute('data-palette', colorPalette);
+
+    const updateColors = () => {
+      let activeTheme = theme;
+      if (theme === 'system') {
+        activeTheme = typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      }
+
+      const palette = customPalettes.find((p) => p.id === colorPalette);
+      if (palette) {
+        root.style.setProperty('--primary-dark', palette.colors.primaryDark, 'important');
+        root.style.setProperty('--primary-hover', palette.colors.primaryHover, 'important');
+        root.style.setProperty('--primary', palette.colors.primary, 'important');
+        root.style.setProperty('--primary-light', palette.colors.primaryLight, 'important');
+        root.style.setProperty('--primary-lightest', palette.colors.primaryLightest, 'important');
+        root.style.setProperty('--accent-dark', palette.colors.accentDark, 'important');
+        root.style.setProperty('--accent-hover', palette.colors.accentHover, 'important');
+        root.style.setProperty('--accent', palette.colors.accent, 'important');
+        root.style.setProperty('--accent-light', palette.colors.accentLight, 'important');
+        root.style.setProperty('--accent-lightest', palette.colors.accentLightest, 'important');
+        
+        const bg = activeTheme === 'dark' ? palette.colors.backgroundDark : palette.colors.backgroundLight;
+        if (bg) {
+          root.style.setProperty('--color-slate-950', bg, 'important');
+        }
+      } else {
+        // Clear custom properties
+        root.style.removeProperty('--primary-dark');
+        root.style.removeProperty('--primary-hover');
+        root.style.removeProperty('--primary');
+        root.style.removeProperty('--primary-light');
+        root.style.removeProperty('--primary-lightest');
+        root.style.removeProperty('--accent-dark');
+        root.style.removeProperty('--accent-hover');
+        root.style.removeProperty('--accent');
+        root.style.removeProperty('--accent-light');
+        root.style.removeProperty('--accent-lightest');
+        root.style.removeProperty('--color-slate-950');
+      }
+    };
+
+    updateColors();
+
+    if (theme === 'system' && typeof window !== 'undefined') {
+      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      const listener = () => updateColors();
+      mediaQuery.addEventListener('change', listener);
+      return () => mediaQuery.removeEventListener('change', listener);
+    }
+  }, [colorPalette, customPalettes, theme]);
+
   const t = (key: string): string => {
     const dict = translations[lang] || translations['en'];
     return (dict as any)[key] || key;
   };
 
   return (
-    <PreferencesContext.Provider value={{ lang, theme, setLang, setTheme, t }}>
+    <PreferencesContext.Provider
+      value={{
+        lang,
+        theme,
+        colorPalette,
+        setLang,
+        setTheme,
+        setColorPalette,
+        customPalettes,
+        addCustomPalette,
+        deleteCustomPalette,
+        t,
+      }}
+    >
       {children}
     </PreferencesContext.Provider>
   );

@@ -1,52 +1,61 @@
-# Walkthrough - Kubernetes & InfluxDB Observability Dashboard
+# Walkthrough - K6 Observability, Native Scheduling & S3 Reporting System
 
-We have successfully integrated SQLite-backed persistence, local EKS kubeconfig context loading, local user management with role-based access control (RBAC), SSO/OIDC integration, and EKS-ready deployment configurations with Dockerfiles.
-
----
-
-## 🛠️ Actions Accomplished
-
-### 1. Persistent Local Database & Users (SQLite)
-- **Database Helper (`/backend/internal/database/database.go`):** Added `users` and `sso_config` tables:
-  - `users`: stores usernames, role-based configuration, SHA-256 password hash, and cryptographically secure dynamic salts.
-  - `sso_config`: stores dynamic settings for OpenID Connect (OIDC) authentication.
-  - Auto-seeding: Automatically configures a default `admin` user with the password `admin` if the `users` table is empty.
-- **Server Auth & Middlewares (`/backend/internal/server/server.go`):**
-  - **`adminOnly` Middleware:** Restricts administrative endpoints (such as SSO and user registration) to users with the role `administrator` or `admin`.
-  - **`editorOrAdmin` Middleware:** Secures write operations on K6 Operator custom resources (creating/deleting tests) so that only editors or administrators can perform them, blocking viewers.
-
-### 2. OIDC Single Sign-On (SSO) Integration
-- **Dynamic Authorization Discovery:** Retrieves OIDC endpoints dynamically at runtime from the configured `.well-known/openid-configuration` metadata of the OIDC `issuer_url`.
-- **Callback Auth Handlers:** Complete OAuth2 authorization code token exchange and profile fetching via `/api/auth/sso/callback`, mapping user groups or usernames to the corresponding roles.
-- **SSO Status API:** Allows the login page to check if SSO is enabled and offer a dedicated redirection path.
-
-### 3. Frontend Settings & User Management
-- **Local User Configuration:** Administrators can add or delete local users, selecting their roles (`administrator`, `editor`, or `viewer`) in real time.
-- **SSO Form Setup:** Interactive configuration panel under Settings page for Issuer URL, Client ID, Client Secret, and redirect URLs.
-- **Access Guarding:** Automatically hides or disables action buttons (like running a load test) for users logged in with the `viewer` role on the CRD dashboard.
-
-### 4. EKS Deployment Configuration & PVCs
-- **Kubernetes Spec ([k8s-deployment.yaml](file:///Users/yehoshouad/tmp/perso/k6-bedrock-dashboard/k8s-deployment.yaml)):**
-  - Configures Namespace (`k6-bedrock-dashboard`), ServiceAccount, and ClusterRoleBindings to manage CRDs and namespaces.
-  - Sets up a `1Gi` PersistentVolumeClaim (`k6-dashboard-sqlite-pvc`) to mount the SQLite database state at `/data/dashboard.db` with a `Recreate` deployment rollout strategy to avoid write locks.
-- **Dockerization:**
-  - **[backend/Dockerfile](file:///Users/yehoshouad/tmp/perso/k6-bedrock-dashboard/backend/Dockerfile):** Multi-stage builder compiling Go with CGO enabled (required for SQLite), running inside a minimal `debian:bookworm-slim` container.
-  - **[frontend/Dockerfile](file:///Users/yehoshouad/tmp/perso/k6-bedrock-dashboard/frontend/Dockerfile):** Multi-stage production node environment with optimal caching.
+We have successfully migrated the portal scheduler to native Kubernetes `Job` and `CronJob` execution, implemented active schedule toggle controls (Pause/Resume), replaced native browser alerts with custom centered confirmation dialogs, and built a stateless S3-compatible HTML report archiving and embedded viewer subsystem.
 
 ---
 
-## 🔍 Verification & Testing Results
+## 🛠️ Actions Accomplished & Architecture
+
+### 1. Native Kubernetes Job & CronJob Scheduling
+- **Native Scheduling**: Replaced the custom SQLite scheduler loop.
+  - If "Run on a Schedule" is checked in the form, the backend deploys a native Kubernetes `CronJob` (`batch/v1`).
+  - If unchecked, it deploys a native Kubernetes `Job` (`batch/v1`) immediately.
+- **Resource Limits & Parallelism**: Parsed CPU limit, memory limit, and parallelism values from K6 templates and passed them directly to the Kubernetes Job/CronJob spec.
+- **Automatic Cleanup**: Updated the delete schedule handler to automatically delete corresponding Jobs and CronJobs on EKS.
+
+### 2. Pause/Resume Toggling
+- **Spec Suspend Sync**: Implemented schedule toggling. Toggling active state on the UI list updates the database and immediately calls Kubernetes client-go to set `spec.suspend = !active` on the corresponding `CronJob` resource.
+- **Initial State**: CronJob creation now initializes `spec.suspend` according to the active status checkbox at creation time.
+
+### 3. Custom Centered Confirmation Dialogs
+- **Premium Design**: Replaced raw browser-native `confirm()` popups. Built a custom centered modal that uses the dashboard's glassmorphism style, dark color scheme, and purple-to-pink gradient accents.
+
+### 4. S3 HTML Report Archiving Service (`report-service/`)
+- **Stateless Design**: Created a stateless Go microservice (`report-service`) that handles all HTML report storage using S3 (AWS or MinIO). 
+  - Lists and groups reports by parsing the S3 key structure `reports/{cluster_id}/{namespace}/{template_id}/{run_name}_{timestamp}.html` without needing any SQL database storage.
+- **Sidecar Job Archiver**: Injected an uploader container running `curlimages/curl` into spawned Jobs. The `k6-runner` container writes the HTML report to a shared `emptyDir` volume using `--out web-dashboard=export=/report/report.html`. The sidecar polls for the file and uploads it with metadata to the S3 bucket.
+- **Embedded UI Viewer**: Built a premium `/reports` page in Next.js showing runs grouped by cluster. Integrates a custom modal that embeds the HTML dashboard in an iframe with toggleable fullscreen.
+
+---
+
+## 🛠️ Frontend Proxy Routing Upgrade
+- **[NEW] [proxy.ts](file:///Users/yehoshouad/tmp/perso/k6-stratum-portal/frontend/src/proxy.ts)**: Configured Next.js's new `proxy` file convention (`src/proxy.ts`) to route `/api/reports/*` requests to the `REPORT_SERVICE_URL` and all other `/api/*` requests to `BACKEND_URL`. 
+- **Dynamic Resolution**: Because `proxy.ts` executes dynamically for each request at runtime (Edge runtime level), it evaluates variables such as `BACKEND_URL` and `REPORT_SERVICE_URL` dynamically, preventing Next.js build-time caching which would freeze values to local fallbacks.
+
+---
+
+## 🔍 Verification & Running Checks
 
 ### 1. Build Verification
-- **Go Backend:** Compiled and built successfully:
+- **Go Backend (`backend/`)**: Compiles and builds cleanly with no errors:
   ```bash
-  go build ./cmd/api
+  go build -v ./...
   ```
-- **Next.js Frontend:** Built cleanly with all TypeScript type checks passing:
+- **Go Report Service (`report-service/`)**: Compiles cleanly:
+  ```bash
+  go build -v .
+  ```
+- **Next.js Frontend (`frontend/`)**: Bundles successfully with all TypeScript types passing:
   ```bash
   npm run build
   ```
 
-### 2. End-to-End Local Testing
-- Verified that local user management correctly blocks editor/viewer users from viewing Settings or performing write actions.
-- Verified that database migration seeds the default `admin` with SHA-256 secure hash.
+### 2. Docker Compose Integration
+- Added local `minio` and `report-service` containers to `docker-compose.yaml`.
+- Configured Caddy proxy paths to route `/api/reports` and `/api/reports/*` to the S3 uploader service.
+- To run the entire environment locally:
+  ```bash
+  docker-compose up --build
+  ```
+  - Portal Frontend will be accessible at: `https://localhost` (or `http://localhost`).
+  - MinIO Storage Console will be accessible at: `http://localhost:9001` (User: `minioadmin`, Pass: `minioadmin`).

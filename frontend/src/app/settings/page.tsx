@@ -17,16 +17,214 @@ import {
   Users,
   Key
 } from 'lucide-react';
-import { api, ClusterConfig, InfluxServerConfig, K6Template, User, SSOConfig } from '@/services/api';
-import { usePreferences } from '@/components/PreferencesContext';
+import { api, ClusterConfig, InfluxServerConfig, K6Template, User, SSOConfig, APIToken } from '@/services/api';
+import { usePreferences, defaultPalettes, CustomPalette } from '@/components/PreferencesContext';
 
 export default function SettingsPage() {
-  const { t } = usePreferences();
+  const { t, colorPalette, setColorPalette, customPalettes, addCustomPalette, deleteCustomPalette } = usePreferences();
+
+  const [isCustomPaletteModalOpen, setIsCustomPaletteModalOpen] = useState(false);
+  const [editingPaletteId, setEditingPaletteId] = useState<string | null>(null);
+  const [initialEditPalette, setInitialEditPalette] = useState<CustomPalette | null>(null);
+  const [customPaletteForm, setCustomPaletteForm] = useState({
+    name: '',
+    primary: '#a855f7',
+    primaryHover: '#9333ea',
+    primaryLight: '#c084fc',
+    primaryLightest: '#e9d5ff',
+    primaryDark: '#581c87',
+    accent: '#ec4899',
+    accentHover: '#db2777',
+    accentLight: '#f472b6',
+    accentLightest: '#fbcfe8',
+    accentDark: '#831843',
+    backgroundDark: '#090d16',
+    backgroundLight: '#f1f5f9'
+  });
+
+  const adjustColor = (hex: string, percent: number): string => {
+    try {
+      let color = hex.replace(/^\s*#|\s*$/g, '');
+      if (color.length === 3) {
+        color = color.replace(/(.)/g, '$1$1');
+      }
+      if (color.length !== 6) return hex;
+      let r = parseInt(color.substring(0, 2), 16);
+      let g = parseInt(color.substring(2, 4), 16);
+      let b = parseInt(color.substring(4, 6), 16);
+
+      r = Math.min(255, Math.max(0, Math.round(r * (1 + percent / 100))));
+      g = Math.min(255, Math.max(0, Math.round(g * (1 + percent / 100))));
+      b = Math.min(255, Math.max(0, Math.round(b * (1 + percent / 100))));
+
+      const rHex = r.toString(16).padStart(2, '0');
+      const gHex = g.toString(16).padStart(2, '0');
+      const bHex = b.toString(16).padStart(2, '0');
+      return `#${rHex}${gHex}${bHex}`;
+    } catch (e) {
+      return hex;
+    }
+  };
+
+  const handlePrimaryChange = (val: string) => {
+    setCustomPaletteForm(prev => {
+      const isValid = /^#[0-9A-Fa-f]{6}$/.test(val) || /^#[0-9A-Fa-f]{3}$/.test(val);
+      if (isValid) {
+        return {
+          ...prev,
+          primary: val,
+          primaryHover: adjustColor(val, -12),
+          primaryLight: adjustColor(val, 15),
+          primaryLightest: adjustColor(val, 40),
+          primaryDark: adjustColor(val, -45)
+        };
+      }
+      return { ...prev, primary: val };
+    });
+  };
+
+  const handleAccentChange = (val: string) => {
+    setCustomPaletteForm(prev => {
+      const isValid = /^#[0-9A-Fa-f]{6}$/.test(val) || /^#[0-9A-Fa-f]{3}$/.test(val);
+      if (isValid) {
+        return {
+          ...prev,
+          accent: val,
+          accentHover: adjustColor(val, -12),
+          accentLight: adjustColor(val, 15),
+          accentLightest: adjustColor(val, 40),
+          accentDark: adjustColor(val, -45)
+        };
+      }
+      return { ...prev, accent: val };
+    });
+  };
+
+  const handleEditCustomPaletteClick = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation(); // prevent selecting the palette on click
+    const palette = customPalettes.find(p => p.id === id);
+    if (!palette) return;
+
+    setCustomPaletteForm({
+      name: palette.name,
+      primary: palette.colors.primary,
+      primaryHover: palette.colors.primaryHover,
+      primaryLight: palette.colors.primaryLight,
+      primaryLightest: palette.colors.primaryLightest,
+      primaryDark: palette.colors.primaryDark,
+      accent: palette.colors.accent,
+      accentHover: palette.colors.accentHover,
+      accentLight: palette.colors.accentLight,
+      accentLightest: palette.colors.accentLightest,
+      accentDark: palette.colors.accentDark,
+      backgroundDark: palette.colors.backgroundDark || '#090d16',
+      backgroundLight: palette.colors.backgroundLight || '#f1f5f9'
+    });
+    setInitialEditPalette(palette);
+    setEditingPaletteId(id);
+    setIsCustomPaletteModalOpen(true);
+  };
+
+  const handleResetFormColors = () => {
+    if (!initialEditPalette) return;
+    setCustomPaletteForm({
+      name: initialEditPalette.name,
+      primary: initialEditPalette.colors.primary,
+      primaryHover: initialEditPalette.colors.primaryHover,
+      primaryLight: initialEditPalette.colors.primaryLight,
+      primaryLightest: initialEditPalette.colors.primaryLightest,
+      primaryDark: initialEditPalette.colors.primaryDark,
+      accent: initialEditPalette.colors.accent,
+      accentHover: initialEditPalette.colors.accentHover,
+      accentLight: initialEditPalette.colors.accentLight,
+      accentLightest: initialEditPalette.colors.accentLightest,
+      accentDark: initialEditPalette.colors.accentDark,
+      backgroundDark: initialEditPalette.colors.backgroundDark || '#090d16',
+      backgroundLight: initialEditPalette.colors.backgroundLight || '#f1f5f9'
+    });
+    showToast('Palette colors reset to previous values', 'info');
+  };
+
+  const handleAddCustomPalette = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!customPaletteForm.name.trim()) return;
+
+    const id = editingPaletteId || `custom-${Date.now()}`;
+    addCustomPalette({
+      id,
+      name: customPaletteForm.name,
+      colors: {
+        primary: customPaletteForm.primary,
+        primaryHover: customPaletteForm.primaryHover,
+        primaryLight: customPaletteForm.primaryLight,
+        primaryLightest: customPaletteForm.primaryLightest,
+        primaryDark: customPaletteForm.primaryDark,
+        accent: customPaletteForm.accent,
+        accentHover: customPaletteForm.accentHover,
+        accentLight: customPaletteForm.accentLight,
+        accentLightest: customPaletteForm.accentLightest,
+        accentDark: customPaletteForm.accentDark,
+        backgroundDark: customPaletteForm.backgroundDark,
+        backgroundLight: customPaletteForm.backgroundLight
+      }
+    });
+
+    setIsCustomPaletteModalOpen(false);
+    setEditingPaletteId(null);
+    setInitialEditPalette(null);
+    setColorPalette(id);
+    showToast(editingPaletteId ? 'Custom color palette updated successfully!' : 'Custom color palette added successfully!', 'success');
+  };
+
+  const handleDeleteCustomPaletteClick = (e: React.MouseEvent, id: string, name: string) => {
+    e.stopPropagation(); // prevent selecting the palette on click
+    requestConfirm(
+      t('deletePaletteTitle') || 'Delete Custom Palette',
+      <span>Are you sure you want to delete the custom palette "<strong className="font-semibold text-slate-200">{name}</strong>"?</span>,
+      () => {
+        deleteCustomPalette(id);
+        showToast('Custom color palette deleted successfully', 'info');
+      }
+    );
+  };
   
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: React.ReactNode;
+    onConfirm: () => void | Promise<void>;
+  } | null>(null);
+
+  const requestConfirm = (title: string, message: React.ReactNode, onConfirm: () => void | Promise<void>) => {
+    setConfirmDialog({
+      isOpen: true,
+      title,
+      message,
+      onConfirm: async () => {
+        setConfirmDialog(null);
+        await onConfirm();
+      }
+    });
+  };
+
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
+    setToast({ message, type });
+  };
+
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
   
   // K8s Clusters settings state
   const [clusters, setClusters] = useState<ClusterConfig[]>([]);
+  const [deletingCluster, setDeletingCluster] = useState<ClusterConfig | null>(null);
+  const [confirmClusterName, setConfirmClusterName] = useState('');
   const [loadingClusters, setLoadingClusters] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   
@@ -39,6 +237,8 @@ export default function SettingsPage() {
   });
   const [allowedNamespaces, setAllowedNamespaces] = useState<string[]>([]);
   const [customNamespaceInput, setCustomNamespaceInput] = useState('');
+  const [discoveredNamespaces, setDiscoveredNamespaces] = useState<string[]>([]);
+  const [loadingNamespaces, setLoadingNamespaces] = useState(false);
   
   const [isEditing, setIsEditing] = useState(false);
   const [editingClusterId, setEditingClusterId] = useState<string | null>(null);
@@ -199,21 +399,28 @@ export default function SettingsPage() {
   };
 
   const handleDeleteInfluxServer = async (id: string, name: string) => {
-    if (!confirm(`Are you sure you want to delete the InfluxDB server "${name}"?`)) return;
-    try {
-      await api.deleteInfluxServer(id);
-      await loadInfluxServers();
-    } catch (err: any) {
-      alert(err.message || 'Error deleting InfluxDB server');
-    }
+    requestConfirm(
+      'Delete InfluxDB Server',
+      <span>Are you sure you want to delete the InfluxDB server "<strong className="font-semibold text-slate-200">{name}</strong>"?</span>,
+      async () => {
+        try {
+          await api.deleteInfluxServer(id);
+          await loadInfluxServers();
+          showToast(`Successfully deleted InfluxDB server "${name}"`, 'success');
+        } catch (err: any) {
+          showToast(err.message || 'Error deleting InfluxDB server', 'error');
+        }
+      }
+    );
   };
 
   const handleActivateInfluxServer = async (id: string) => {
     try {
       await api.activateInfluxServer(id);
       await loadInfluxServers();
+      showToast('Activated InfluxDB server successfully', 'success');
     } catch (err: any) {
-      alert(err.message || 'Error activating InfluxDB server');
+      showToast(err.message || 'Error activating InfluxDB server', 'error');
     }
   };
 
@@ -335,13 +542,19 @@ export default function () {
   };
 
   const handleDeleteTemplate = async (id: string, name: string) => {
-    if (!confirm(`Are you sure you want to delete the template "${name}"?`)) return;
-    try {
-      await api.deleteTemplate(id);
-      await loadTemplates();
-    } catch (err: any) {
-      alert(err.message || 'Error deleting template');
-    }
+    requestConfirm(
+      t('deleteTemplateTitle') || 'Delete Template',
+      <span>Are you sure you want to delete the template "<strong className="font-semibold text-slate-200">{name}</strong>"?</span>,
+      async () => {
+        try {
+          await api.deleteTemplate(id);
+          await loadTemplates();
+          showToast(`Successfully deleted template "${name}"`, 'success');
+        } catch (err: any) {
+          showToast(err.message || 'Error deleting template', 'error');
+        }
+      }
+    );
   };
 
   // User Management state
@@ -355,6 +568,16 @@ export default function () {
   });
   const [userError, setUserError] = useState('');
   const [savingUser, setSavingUser] = useState(false);
+
+  // API Tokens state
+  const [apiTokens, setApiTokens] = useState<APIToken[]>([]);
+  const [loadingTokens, setLoadingTokens] = useState(false);
+  const [newTokenName, setNewTokenName] = useState('');
+  const [newTokenRole, setNewTokenRole] = useState('editor');
+  const [newTokenExpiry, setNewTokenExpiry] = useState(0); // 0 = Never
+  const [generatedToken, setGeneratedToken] = useState<APIToken | null>(null);
+  const [isTokenModalOpen, setIsTokenModalOpen] = useState(false);
+  const [copiedToken, setCopiedToken] = useState(false);
 
   // SSO state
   const [ssoConfig, setSsoConfig] = useState<SSOConfig>({
@@ -460,16 +683,22 @@ export default function () {
 
   const handleDeleteUser = async (username: string) => {
     if (username === 'admin') {
-      alert('Cannot delete the main admin account.');
+      showToast(t('cannotDeleteAdmin') || 'Cannot delete the main admin account.', 'error');
       return;
     }
-    if (!confirm(`Are you sure you want to delete the user "${username}"?`)) return;
-    try {
-      await api.deleteUser(username);
-      await loadUsers();
-    } catch (err: any) {
-      alert(err.message || 'Error deleting user');
-    }
+    requestConfirm(
+      t('deleteUserTitle') || 'Delete User',
+      <span>Are you sure you want to delete the user "<strong className="font-semibold text-slate-200">{username}</strong>"?</span>,
+      async () => {
+        try {
+          await api.deleteUser(username);
+          await loadUsers();
+          showToast(`Successfully deleted user "${username}"`, 'success');
+        } catch (err: any) {
+          showToast(err.message || 'Error deleting user', 'error');
+        }
+      }
+    );
   };
 
   const handleSaveSSO = async (e: React.FormEvent) => {
@@ -496,6 +725,50 @@ export default function () {
     }
   }, []);
 
+  const loadAPITokens = async () => {
+    try {
+      setLoadingTokens(true);
+      const list = await api.getAPITokens();
+      setApiTokens(list || []);
+    } catch (err) {
+      console.error('Failed to load API tokens', err);
+    } finally {
+      setLoadingTokens(false);
+    }
+  };
+
+  const handleGenerateAPIToken = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTokenName) return;
+    try {
+      const tok = await api.createAPIToken(newTokenName, newTokenRole, newTokenExpiry);
+      setGeneratedToken(tok);
+      setIsTokenModalOpen(true);
+      setNewTokenName('');
+      setNewTokenRole('editor');
+      setNewTokenExpiry(0);
+      await loadAPITokens();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to generate API Token', 'error');
+    }
+  };
+
+  const handleDeleteAPIToken = async (tokenHash: string, name: string) => {
+    requestConfirm(
+      t('deleteTokenTitle') || 'Delete API Token',
+      <span>Are you sure you want to delete the API Token "<strong className="font-semibold text-slate-200">{name}</strong>"?</span>,
+      async () => {
+        try {
+          await api.deleteAPIToken(tokenHash);
+          await loadAPITokens();
+          showToast(`Successfully deleted API Token "${name}"`, 'success');
+        } catch (err: any) {
+          showToast(err.message || 'Error deleting API Token', 'error');
+        }
+      }
+    );
+  };
+
   const loadSettingsData = async () => {
     if (!isAdmin) return;
     try {
@@ -507,6 +780,7 @@ export default function () {
       await loadTemplates();
       await loadUsers();
       await loadSSOConfig();
+      await loadAPITokens();
     } catch (err) {
       console.error('Failed to load settings data', err);
     } finally {
@@ -520,7 +794,7 @@ export default function () {
     }
   }, [isAdmin]);
 
-  const handleStartEdit = (c: ClusterConfig) => {
+  const handleStartEdit = async (c: ClusterConfig) => {
     setEditingClusterId(c.id);
     setIsEditing(true);
     setNewCluster({
@@ -530,8 +804,25 @@ export default function () {
       raw_secret: '', // leave empty if not updating the secret
       ca_cert_base64: c.ca_cert_base64 || ''
     });
-    setAllowedNamespaces(c.namespaces ? c.namespaces.split(',').map(s => s.trim()).filter(Boolean) : []);
+    const initialNamespaces = c.namespaces ? c.namespaces.split(',').map(s => s.trim()).filter(Boolean) : [];
+    setAllowedNamespaces(initialNamespaces);
+    setDiscoveredNamespaces([]);
     setIsModalOpen(true);
+
+    setLoadingNamespaces(true);
+    try {
+      const list = await api.getNamespaces(c.id);
+      setDiscoveredNamespaces(list || []);
+      // If the cluster has no whitelisted namespaces configured yet,
+      // pre-populate with the ones discovered with k6s=enabled.
+      if (initialNamespaces.length === 0 && list && list.length > 0) {
+        setAllowedNamespaces(list);
+      }
+    } catch (err) {
+      console.error('Failed to fetch cluster namespaces', err);
+    } finally {
+      setLoadingNamespaces(false);
+    }
   };
 
   const handleStartAdd = () => {
@@ -545,6 +836,7 @@ export default function () {
       ca_cert_base64: ''
     });
     setAllowedNamespaces([]);
+    setDiscoveredNamespaces([]);
     setIsModalOpen(true);
   };
 
@@ -594,12 +886,24 @@ export default function () {
   };
 
   const handleDeleteCluster = async (id: string, name: string) => {
-    if (!confirm(`${t('delete')} ${name}?`)) return;
+    const cluster = clusters.find(c => c.id === id);
+    if (cluster) {
+      setConfirmClusterName('');
+      setDeletingCluster(cluster);
+    }
+  };
+
+  const confirmDeleteCluster = async () => {
+    if (!deletingCluster) return;
     try {
-      await api.deleteCluster(id);
-      setClusters(clusters.filter(c => c.id !== id));
-    } catch (err) {
-      alert('Error deleting cluster');
+      await api.deleteCluster(deletingCluster.id);
+      showToast(`Successfully deleted cluster "${deletingCluster.name}"`, 'success');
+      setDeletingCluster(null);
+      setConfirmClusterName('');
+      const clusterList = await api.getClusters();
+      setClusters(clusterList || []);
+    } catch (err: any) {
+      showToast(err.message || 'Error deleting cluster', 'error');
     }
   };
 
@@ -1176,6 +1480,172 @@ export default function () {
         </div>
       </div>
 
+      {/* API Tokens Section */}
+      <div className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-6 backdrop-blur-md space-y-6 animate-fadeIn">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-bold text-white flex items-center gap-2">
+            <Key className="w-5 h-5 text-purple-400" />
+            <span>{t('apiTokens') || "API Tokens"}</span>
+          </h3>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Token Generation Form */}
+          <div className="bg-slate-950/40 border border-slate-800/60 rounded-2xl p-5 space-y-4 lg:col-span-1">
+            <h4 className="text-sm font-semibold text-white">{t('generateToken') || "Generate Token"}</h4>
+            <form onSubmit={handleGenerateAPIToken} className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('tokenName') || "Token Name"}</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. CI/CD Integration"
+                  value={newTokenName}
+                  onChange={(e) => setNewTokenName(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-200 focus:border-purple-500 outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('role') || "Role"}</label>
+                  <select
+                    value={newTokenRole}
+                    onChange={(e) => setNewTokenRole(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-slate-200 focus:border-purple-500 outline-none font-sans"
+                  >
+                    <option value="viewer">Viewer</option>
+                    <option value="editor">Editor</option>
+                    <option value="administrator">Administrator</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('expiry') || "Expiration"}</label>
+                  <select
+                    value={newTokenExpiry}
+                    onChange={(e) => setNewTokenExpiry(Number(e.target.value))}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-slate-200 focus:border-purple-500 outline-none font-sans"
+                  >
+                    <option value={0}>{t('never') || "Never"}</option>
+                    <option value={7}>{t('days7') || "7 Days"}</option>
+                    <option value={30}>{t('days30') || "30 Days"}</option>
+                    <option value={90}>{t('days90') || "90 Days"}</option>
+                  </select>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-2.5 bg-gradient-to-r from-purple-600 to-pink-500 text-white rounded-xl text-xs font-semibold shadow-md hover:scale-102 active:scale-98 transition cursor-pointer"
+              >
+                {t('create') || "Create"}
+              </button>
+            </form>
+          </div>
+
+          {/* Tokens List */}
+          <div className="lg:col-span-2 space-y-3">
+            {loadingTokens ? (
+              <div className="py-12 text-center text-slate-500 text-xs">Loading tokens...</div>
+            ) : apiTokens.length === 0 ? (
+              <div className="py-12 text-center text-slate-500 text-xs">No API tokens defined.</div>
+            ) : (
+              <div className="space-y-3 max-h-[350px] overflow-y-auto pr-2">
+                {apiTokens.map((tok) => {
+                  const isExpired = tok.expires_at ? new Date(tok.expires_at) < new Date() : false;
+                  return (
+                    <div 
+                      key={tok.token_hash} 
+                      className="flex items-center justify-between p-4 bg-slate-950/40 border border-slate-800/60 rounded-2xl"
+                    >
+                      <div className="flex items-center space-x-3 min-w-0">
+                        <div className="p-2.5 bg-purple-500/10 text-purple-400 border border-purple-500/20 rounded-xl shrink-0">
+                          <Key className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center space-x-2">
+                            <p className="text-xs font-semibold text-slate-200 truncate">{tok.name}</p>
+                            <span className="px-1.5 py-0.5 bg-slate-800 text-purple-400 border border-purple-500/20 rounded-md text-[8px] font-semibold uppercase tracking-wider">
+                              {tok.role}
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-[9px] text-slate-500 font-mono">
+                            <span>{t('createdAt') || "Created At"}: {new Date(tok.created_at).toLocaleDateString()}</span>
+                            <span>
+                              {t('expiresAt') || "Expires At"}: {tok.expires_at ? (
+                                <span className={isExpired ? "text-red-400 font-semibold" : "text-slate-400 font-semibold"}>
+                                  {new Date(tok.expires_at).toLocaleDateString()} {isExpired && "(Expired)"}
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 font-semibold">{t('never') || "Never"}</span>
+                              )}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex space-x-1 shrink-0">
+                        <button
+                          onClick={() => handleDeleteAPIToken(tok.token_hash, tok.name)}
+                          title="Delete API Token"
+                          className="p-2 border border-transparent hover:border-red-500/25 hover:bg-red-500/10 text-slate-500 hover:text-red-400 rounded-xl transition cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Generated API Token Dialog Modal */}
+      {isTokenModalOpen && generatedToken && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-md p-6 shadow-2xl relative space-y-4">
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+              <span>Token Generated Successfully</span>
+            </h3>
+            
+            <p className="text-slate-300 text-xs">
+              {t('tokenNotice') || "Save this token now! It will not be shown again."}
+            </p>
+
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 font-mono text-xs break-all text-purple-400 select-all relative flex items-center justify-between gap-4">
+              <span>{generatedToken.token}</span>
+              <button
+                onClick={() => {
+                  if (generatedToken.token) {
+                    navigator.clipboard.writeText(generatedToken.token);
+                    setCopiedToken(true);
+                    setTimeout(() => setCopiedToken(false), 2000);
+                  }
+                }}
+                className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-[10px] font-semibold shrink-0 cursor-pointer transition active:scale-95"
+              >
+                {copiedToken ? (t('copied') || "Copied!") : (t('copy') || "Copy")}
+              </button>
+            </div>
+
+            <div className="pt-2 flex justify-end">
+              <button
+                onClick={() => {
+                  setIsTokenModalOpen(false);
+                  setGeneratedToken(null);
+                }}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Register Cluster Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
@@ -1332,56 +1802,71 @@ export default function () {
                   </p>
                   
                   {/* Common namespace presets and added namespaces */}
-                  <div className="flex flex-wrap gap-2">
-                    {['default', 'k6-test', 'testing', 'monitoring'].map((ns) => {
-                      const isChecked = allowedNamespaces.includes(ns);
-                      return (
-                        <label 
-                          key={ns}
-                          className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-xs cursor-pointer select-none transition-all duration-200 ${
-                            isChecked
-                              ? 'bg-purple-500/10 border-purple-500/40 text-purple-300'
-                              : 'bg-slate-900 border-slate-800/80 text-slate-500 hover:text-slate-400 hover:bg-slate-800/40'
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            className="hidden"
-                            checked={isChecked}
-                            onChange={() => {
-                              if (isChecked) {
-                                setAllowedNamespaces(allowedNamespaces.filter(n => n !== ns));
-                              } else {
-                                setAllowedNamespaces([...allowedNamespaces, ns]);
-                              }
-                            }}
-                          />
-                          <span>{ns}</span>
-                        </label>
-                      );
-                    })}
+                  {loadingNamespaces ? (
+                    <div className="text-xs text-slate-500 animate-pulse py-1">Loading namespaces from cluster...</div>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {discoveredNamespaces.map((ns) => {
+                        const isChecked = allowedNamespaces.includes(ns);
+                        return (
+                          <label 
+                            key={ns}
+                            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-xs cursor-pointer select-none transition-all duration-200 ${
+                              isChecked
+                                ? 'bg-purple-500/10 border-purple-500/40 text-purple-300'
+                                : 'bg-slate-900 border-slate-800/80 text-slate-500 hover:text-slate-400 hover:bg-slate-800/40'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              className="hidden"
+                              checked={isChecked}
+                              onChange={() => {
+                                if (isChecked) {
+                                  setAllowedNamespaces(allowedNamespaces.filter(n => n !== ns));
+                                } else {
+                                  setAllowedNamespaces([...allowedNamespaces, ns]);
+                                }
+                              }}
+                            />
+                            <span>{ns}</span>
+                          </label>
+                        );
+                      })}
 
-                    {/* Show manually added custom namespaces */}
-                    {allowedNamespaces
-                      .filter((ns) => !['default', 'k6-test', 'testing', 'monitoring'].includes(ns))
-                      .map((ns) => (
-                        <label
-                          key={ns}
-                          className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border bg-purple-500/10 border-purple-500/40 text-purple-300 text-xs cursor-pointer select-none transition-all duration-200"
-                        >
-                          <input
-                            type="checkbox"
-                            className="hidden"
-                            checked={true}
-                            onChange={() => {
-                              setAllowedNamespaces(allowedNamespaces.filter((n) => n !== ns));
-                            }}
-                          />
-                          <span>{ns}</span>
-                          <X className="w-3 h-3 hover:text-purple-100 shrink-0 ml-0.5" />
-                        </label>
-                      ))}
-                  </div>
+                      {/* Show manually added custom namespaces */}
+                      {allowedNamespaces
+                        .filter((ns) => !discoveredNamespaces.includes(ns))
+                        .map((ns) => (
+                          <label
+                            key={ns}
+                            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border bg-purple-500/10 border-purple-500/40 text-purple-300 text-xs cursor-pointer select-none transition-all duration-200"
+                          >
+                            <input
+                              type="checkbox"
+                              className="hidden"
+                              checked={true}
+                              onChange={() => {
+                                setAllowedNamespaces(allowedNamespaces.filter((n) => n !== ns));
+                              }}
+                            />
+                            <span>{ns}</span>
+                            <X className="w-3 h-3 hover:text-purple-100 shrink-0 ml-0.5" />
+                          </label>
+                        ))}
+                      
+                      {!isEditing && allowedNamespaces.length === 0 && (
+                        <div className="text-[11px] text-slate-500 py-1">
+                          No namespaces loaded. Add one manually below.
+                        </div>
+                      )}
+                      {isEditing && discoveredNamespaces.length === 0 && (
+                        <div className="text-[11px] text-purple-400/90 py-1">
+                          No namespaces found with label <span className="font-mono bg-purple-500/5 px-1 py-0.5 rounded border border-purple-500/10">k6s=enabled</span>.
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Add custom namespace input */}
                   <div className="flex gap-2">
@@ -1648,6 +2133,552 @@ export default function () {
                   className="flex-1 py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white rounded-xl text-xs font-semibold shadow-lg transition cursor-pointer disabled:opacity-50"
                 >
                   {savingUser ? 'Adding...' : 'Add User'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* Toast Notification */}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 animate-slideUp">
+          <div className={`flex items-center space-x-3 px-4 py-3 rounded-2xl border shadow-lg backdrop-blur-md transition-all duration-300 ${
+            toast.type === 'success' 
+              ? 'bg-emerald-950/80 border-emerald-500/30 text-emerald-300' 
+              : toast.type === 'error'
+              ? 'bg-red-950/80 border-red-500/30 text-red-300'
+              : 'bg-blue-950/80 border-blue-500/30 text-blue-300'
+          }`}>
+            <span className="w-2 h-2 rounded-full animate-ping bg-current" />
+            <span className="text-xs font-semibold">{toast.message}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Confirmation Dialog */}
+      {confirmDialog?.isOpen && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-sm p-6 shadow-2xl space-y-4">
+            <h3 className="text-lg font-bold text-white">{confirmDialog.title}</h3>
+            <p className="text-slate-400 text-xs leading-normal">{confirmDialog.message}</p>
+            <div className="flex space-x-3 pt-2">
+              <button
+                onClick={() => setConfirmDialog(null)}
+                className="flex-1 py-2 border border-slate-850 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold transition cursor-pointer"
+              >
+                {t('cancel') || 'Cancel'}
+              </button>
+              <button
+                onClick={confirmDialog.onConfirm}
+                className="flex-1 py-2 bg-gradient-to-r from-purple-600 to-pink-500 text-white rounded-xl text-xs font-semibold shadow-lg transition cursor-pointer hover:from-purple-500 hover:to-pink-400"
+              >
+                {t('confirm') || 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* K8s Cluster Deletion Confirmation Modal */}
+      {deletingCluster && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-slate-900 border border-red-500/20 rounded-3xl w-full max-w-md p-8 shadow-2xl relative">
+            <button
+              onClick={() => {
+                setDeletingCluster(null);
+                setConfirmClusterName('');
+              }}
+              className="absolute top-6 right-6 text-slate-500 hover:text-slate-300 p-1 cursor-pointer animate-pulse"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center space-x-3 text-red-400 mb-4">
+              <ShieldAlert className="w-6 h-6 text-red-500 animate-bounce" />
+              <h3 className="text-xl font-bold text-white">{t('deleteClusterTitle') || 'Delete Kubernetes Cluster'}</h3>
+            </div>
+
+            <div className="space-y-4">
+              <p className="text-slate-300 text-sm leading-relaxed">
+                {t('deleteClusterConfirmPrefix') || 'Are you sure you want to delete the K8S Cluster'}{' '}
+                <strong className="font-bold text-red-400">"{deletingCluster.name}"</strong>
+                {t('deleteClusterConfirmSuffix') || '?'}
+              </p>
+
+              <div className="p-3 critical-warning-box rounded-xl text-xs leading-relaxed">
+                {t('deleteClusterWarning') || 'This action cannot be undone. This will permanently delete the cluster connection and remove it from your settings.'}
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-xs font-semibold text-slate-400">
+                  {t('deleteClusterTypePrompt') || 'Please type the cluster name to confirm:'}
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder={deletingCluster.name}
+                  value={confirmClusterName}
+                  onChange={(e) => setConfirmClusterName(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none font-mono"
+                />
+              </div>
+
+              <div className="flex space-x-3 pt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeletingCluster(null);
+                    setConfirmClusterName('');
+                  }}
+                  className="flex-1 py-3 border border-slate-850 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold transition cursor-pointer"
+                >
+                  {t('cancel') || 'Cancel'}
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmDeleteCluster}
+                  disabled={confirmClusterName !== deletingCluster.name}
+                  className="flex-1 py-3 bg-gradient-to-r from-red-600 to-rose-500 text-white btn-text-always-light rounded-xl text-xs font-semibold shadow-lg transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed hover:from-red-500 hover:to-rose-400"
+                >
+                  {t('delete') || 'Delete'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Color Palette Choice Section */}
+      <div className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-6 backdrop-blur-md space-y-6 animate-fadeIn">
+        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+          <div>
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <span className="w-5 h-5 rounded-full bg-gradient-to-r from-purple-600 to-pink-500 animate-pulse shrink-0" />
+              <span>{t('colorPalette') || "Color Palette"}</span>
+            </h3>
+            <p className="text-slate-400 text-xs mt-1">
+              Select a color palette to customize the dashboard primary theme and highlight colors.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setCustomPaletteForm({
+                name: '',
+                primary: '#a855f7',
+                primaryHover: '#9333ea',
+                primaryLight: '#c084fc',
+                primaryLightest: '#e9d5ff',
+                primaryDark: '#581c87',
+                accent: '#ec4899',
+                accentHover: '#db2777',
+                accentLight: '#f472b6',
+                accentLightest: '#fbcfe8',
+                accentDark: '#831843',
+                backgroundDark: '#090d16',
+                backgroundLight: '#f1f5f9'
+              });
+              setEditingPaletteId(null);
+              setInitialEditPalette(null);
+              setIsCustomPaletteModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 px-4 py-2 bg-slate-950/80 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs font-semibold text-slate-200 rounded-xl transition cursor-pointer self-start sm:self-auto"
+          >
+            <Plus className="w-4 h-4 text-purple-400" />
+            <span>{t('addCustomPalette') || "+ Add Custom Palette"}</span>
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+          {customPalettes.map((palette) => {
+            const isSelected = colorPalette === palette.id;
+            const displayName = t(palette.name) || palette.name;
+            return (
+              <div
+                key={palette.id}
+                className="relative group w-full animate-fadeIn"
+              >
+                <button
+                  type="button"
+                  onClick={() => setColorPalette(palette.id)}
+                  className={`w-full flex flex-col items-center justify-between p-4 rounded-2xl border transition-all duration-300 hover:scale-102 cursor-pointer ${
+                    isSelected
+                      ? 'bg-slate-950 border-purple-500/40 shadow-lg shadow-purple-500/5'
+                      : 'bg-slate-950/40 border-slate-800/60 hover:bg-slate-950/80 hover:border-slate-800'
+                  }`}
+                >
+                  <div className="flex space-x-2 mb-3">
+                    <span className="w-6 h-6 rounded-full border border-slate-900" style={{ backgroundColor: palette.colors.primary }} />
+                    <span className="w-6 h-6 rounded-full border border-slate-900" style={{ backgroundColor: palette.colors.accent }} />
+                  </div>
+                  <span className="text-xs font-semibold text-slate-200 text-center">{displayName}</span>
+                  {isSelected && (
+                    <span className="mt-2 text-[9px] font-bold text-purple-400 uppercase tracking-wider">
+                      {t('active') || 'Active'}
+                    </span>
+                  )}
+                </button>
+                <div className="absolute top-2 right-2 flex space-x-1 z-10">
+                  <button
+                    type="button"
+                    onClick={(e) => handleEditCustomPaletteClick(e, palette.id)}
+                    className="p-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-400 hover:text-purple-400 rounded-lg shadow-md cursor-pointer"
+                    title={t('edit') || "Edit"}
+                  >
+                    <Edit className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => handleDeleteCustomPaletteClick(e, palette.id, displayName)}
+                    className="p-1.5 bg-slate-950 hover:bg-red-950/85 border border-slate-800 hover:border-red-900/60 text-slate-400 hover:text-red-400 rounded-lg shadow-md cursor-pointer"
+                    title={t('delete') || "Delete"}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Add Custom Palette Modal */}
+      {isCustomPaletteModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-2xl p-8 shadow-2xl relative max-h-[90vh] flex flex-col">
+            <button
+              onClick={() => {
+                setIsCustomPaletteModalOpen(false);
+                setEditingPaletteId(null);
+                setInitialEditPalette(null);
+              }}
+              className="absolute top-6 right-6 text-slate-500 hover:text-slate-300 p-1 cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <h3 className="text-2xl font-bold text-white mb-2">
+              {editingPaletteId ? (t('editCustomPalette') || 'Edit Custom Palette') : (t('customPaletteTitle') || 'Add Custom Palette')}
+            </h3>
+            <p className="text-slate-400 text-xs mb-6">
+              {editingPaletteId 
+                ? 'Update your custom color palette. Adjust the primary and accent colors, and save the changes.'
+                : 'Create a custom color palette. As you pick the base colors, variant shades are auto-calculated but remain fully editable.'}
+            </p>
+
+            <form onSubmit={handleAddCustomPalette} className="flex-1 overflow-y-auto pr-2 space-y-6">
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">
+                    {t('paletteName') || 'Palette Name'}
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Sunset Neon"
+                    value={customPaletteForm.name}
+                    onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, name: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:border-purple-500 outline-none"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1.5">
+                      {t('backgroundDark') || 'Dark Background Color'}
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        required
+                        value={customPaletteForm.backgroundDark}
+                        onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, backgroundDark: e.target.value })}
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:border-purple-500 outline-none font-mono"
+                      />
+                      <input
+                        type="color"
+                        value={customPaletteForm.backgroundDark}
+                        onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, backgroundDark: e.target.value })}
+                        className="w-10 h-10 bg-transparent border-0 cursor-pointer p-0 shrink-0"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1.5">
+                      {t('backgroundLight') || 'Light Background Color'}
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        required
+                        value={customPaletteForm.backgroundLight}
+                        onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, backgroundLight: e.target.value })}
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:border-purple-500 outline-none font-mono"
+                      />
+                      <input
+                        type="color"
+                        value={customPaletteForm.backgroundLight}
+                        onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, backgroundLight: e.target.value })}
+                        className="w-10 h-10 bg-transparent border-0 cursor-pointer p-0 shrink-0"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Primary Colors Section */}
+                <div className="space-y-4">
+                  <h4 className="text-sm font-bold text-slate-300 border-b border-slate-800/80 pb-2">
+                    {t('primaryColor') || 'Primary Colors'}
+                  </h4>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                      {t('primaryColor') || 'Base Primary'}
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        required
+                        value={customPaletteForm.primary}
+                        onChange={(e) => handlePrimaryChange(e.target.value)}
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:border-purple-500 outline-none font-mono"
+                      />
+                      <input
+                        type="color"
+                        value={customPaletteForm.primary}
+                        onChange={(e) => handlePrimaryChange(e.target.value)}
+                        className="w-10 h-9 bg-transparent border-0 cursor-pointer p-0 shrink-0"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                      {t('primaryHover') || 'Primary Hover'}
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        required
+                        value={customPaletteForm.primaryHover}
+                        onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, primaryHover: e.target.value })}
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:border-purple-500 outline-none font-mono"
+                      />
+                      <input
+                        type="color"
+                        value={customPaletteForm.primaryHover}
+                        onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, primaryHover: e.target.value })}
+                        className="w-10 h-9 bg-transparent border-0 cursor-pointer p-0 shrink-0"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                      {t('primaryLight') || 'Primary Light'}
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        required
+                        value={customPaletteForm.primaryLight}
+                        onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, primaryLight: e.target.value })}
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:border-purple-500 outline-none font-mono"
+                      />
+                      <input
+                        type="color"
+                        value={customPaletteForm.primaryLight}
+                        onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, primaryLight: e.target.value })}
+                        className="w-10 h-9 bg-transparent border-0 cursor-pointer p-0 shrink-0"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                      {t('primaryLightest') || 'Primary Lightest'}
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        required
+                        value={customPaletteForm.primaryLightest}
+                        onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, primaryLightest: e.target.value })}
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:border-purple-500 outline-none font-mono"
+                      />
+                      <input
+                        type="color"
+                        value={customPaletteForm.primaryLightest}
+                        onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, primaryLightest: e.target.value })}
+                        className="w-10 h-9 bg-transparent border-0 cursor-pointer p-0 shrink-0"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                      {t('primaryDark') || 'Primary Dark'}
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        required
+                        value={customPaletteForm.primaryDark}
+                        onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, primaryDark: e.target.value })}
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:border-purple-500 outline-none font-mono"
+                      />
+                      <input
+                        type="color"
+                        value={customPaletteForm.primaryDark}
+                        onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, primaryDark: e.target.value })}
+                        className="w-10 h-9 bg-transparent border-0 cursor-pointer p-0 shrink-0"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Accent Colors Section */}
+                <div className="space-y-4">
+                  <h4 className="text-sm font-bold text-slate-300 border-b border-slate-800/80 pb-2">
+                    {t('accentColor') || 'Accent Colors'}
+                  </h4>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                      {t('accentColor') || 'Base Accent'}
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        required
+                        value={customPaletteForm.accent}
+                        onChange={(e) => handleAccentChange(e.target.value)}
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:border-purple-500 outline-none font-mono"
+                      />
+                      <input
+                        type="color"
+                        value={customPaletteForm.accent}
+                        onChange={(e) => handleAccentChange(e.target.value)}
+                        className="w-10 h-9 bg-transparent border-0 cursor-pointer p-0 shrink-0"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                      {t('accentHover') || 'Accent Hover'}
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        required
+                        value={customPaletteForm.accentHover}
+                        onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, accentHover: e.target.value })}
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:border-purple-500 outline-none font-mono"
+                      />
+                      <input
+                        type="color"
+                        value={customPaletteForm.accentHover}
+                        onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, accentHover: e.target.value })}
+                        className="w-10 h-9 bg-transparent border-0 cursor-pointer p-0 shrink-0"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                      {t('accentLight') || 'Accent Light'}
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        required
+                        value={customPaletteForm.accentLight}
+                        onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, accentLight: e.target.value })}
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:border-purple-500 outline-none font-mono"
+                      />
+                      <input
+                        type="color"
+                        value={customPaletteForm.accentLight}
+                        onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, accentLight: e.target.value })}
+                        className="w-10 h-9 bg-transparent border-0 cursor-pointer p-0 shrink-0"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                      {t('accentLightest') || 'Accent Lightest'}
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        required
+                        value={customPaletteForm.accentLightest}
+                        onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, accentLightest: e.target.value })}
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:border-purple-500 outline-none font-mono"
+                      />
+                      <input
+                        type="color"
+                        value={customPaletteForm.accentLightest}
+                        onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, accentLightest: e.target.value })}
+                        className="w-10 h-9 bg-transparent border-0 cursor-pointer p-0 shrink-0"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                      {t('accentDark') || 'Accent Dark'}
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        required
+                        value={customPaletteForm.accentDark}
+                        onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, accentDark: e.target.value })}
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:border-purple-500 outline-none font-mono"
+                      />
+                      <input
+                        type="color"
+                        value={customPaletteForm.accentDark}
+                        onChange={(e) => setCustomPaletteForm({ ...customPaletteForm, accentDark: e.target.value })}
+                        className="w-10 h-9 bg-transparent border-0 cursor-pointer p-0 shrink-0"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex space-x-3 pt-6 border-t border-slate-800/80">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCustomPaletteModalOpen(false);
+                    setEditingPaletteId(null);
+                    setInitialEditPalette(null);
+                  }}
+                  className="flex-1 py-3 border border-slate-850 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold transition cursor-pointer"
+                >
+                  {t('cancel') || 'Cancel'}
+                </button>
+                {editingPaletteId && (
+                  <button
+                    type="button"
+                    onClick={handleResetFormColors}
+                    className="flex-1 py-3 border border-slate-850 hover:bg-slate-800 hover:text-white text-slate-300 rounded-xl text-xs font-semibold transition cursor-pointer"
+                  >
+                    {t('reset') || 'Reset'}
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  className="flex-1 py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white rounded-xl text-xs font-semibold shadow-lg transition cursor-pointer hover:from-purple-500 hover:to-pink-400"
+                >
+                  {editingPaletteId ? (t('save') || 'Save Changes') : (t('createPalette') || 'Create Palette')}
                 </button>
               </div>
             </form>

@@ -24,6 +24,8 @@ export default function DashboardPage() {
   const [loadingOperator, setLoadingOperator] = useState(true);
   const [activeTests, setActiveTests] = useState<{ active_count: number; first_active: string }>({ active_count: 0, first_active: 'None' });
   const [loadingActiveTests, setLoadingActiveTests] = useState(true);
+  const [influxRunsCount, setInfluxRunsCount] = useState<string>('...');
+  const [influxStatus, setInfluxStatus] = useState<'online' | 'offline' | 'checking'>('checking');
 
   const fetchClusters = async () => {
     try {
@@ -61,6 +63,19 @@ export default function DashboardPage() {
     }
   };
 
+  const fetchInfluxRuns = async () => {
+    try {
+      setInfluxStatus('checking');
+      const runs = await api.getTestRuns();
+      setInfluxRunsCount((runs || []).length.toString());
+      setInfluxStatus('online');
+    } catch (err) {
+      console.error('Failed to fetch test runs from InfluxDB', err);
+      setInfluxRunsCount('N/A');
+      setInfluxStatus('offline');
+    }
+  };
+
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const role = localStorage.getItem('role');
@@ -69,6 +84,7 @@ export default function DashboardPage() {
     fetchClusters();
     fetchOperatorStatus();
     fetchActiveTests();
+    fetchInfluxRuns();
   }, []);
 
   return (
@@ -105,7 +121,15 @@ export default function DashboardPage() {
             icon: Activity, 
             color: 'text-pink-400 bg-pink-500/10 border-pink-500/20' 
           },
-          { title: t('influxTelemetries'), value: '3', sub: t('recentRuns'), icon: Database, color: 'text-blue-400 bg-blue-500/10 border-blue-500/20' }
+          { 
+            title: t('influxTelemetries'), 
+            value: influxStatus === 'offline' ? 'Error' : influxRunsCount, 
+            sub: influxStatus === 'offline' ? 'Connection failed' : t('recentRuns'), 
+            icon: Database, 
+            color: influxStatus === 'offline' 
+              ? 'text-red-400 bg-red-500/10 border-red-500/20' 
+              : 'text-blue-400 bg-blue-500/10 border-blue-500/20' 
+          }
         ].map((stat, i) => {
           const Icon = stat.icon;
           return (
@@ -214,10 +238,19 @@ export default function DashboardPage() {
 
             <div className="flex items-center justify-between p-4 bg-slate-900/40 rounded-xl border border-slate-800/80">
               <div className="flex items-center space-x-3">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+                <span className={`w-2.5 h-2.5 rounded-full ${
+                  influxStatus === 'online' ? 'bg-emerald-500' :
+                  influxStatus === 'checking' ? 'bg-slate-600 animate-pulse' : 'bg-red-500'
+                }`} />
                 <span className="text-sm font-semibold text-slate-200">InfluxDB Service</span>
               </div>
-              <span className="text-xs text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded-md border border-emerald-400/25">Online</span>
+              <span className={`text-xs px-2 py-0.5 rounded-md border ${
+                influxStatus === 'online' ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/25' :
+                influxStatus === 'checking' ? 'text-slate-500 bg-slate-500/10 border-slate-500/25' :
+                'text-red-400 bg-red-400/10 border-red-400/25'
+              }`}>
+                {influxStatus === 'online' ? 'Online' : influxStatus === 'checking' ? 'Checking...' : 'Offline'}
+              </span>
             </div>
           </div>
 

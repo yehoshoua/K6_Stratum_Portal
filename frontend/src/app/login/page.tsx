@@ -2,13 +2,13 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Lock, User, ShieldAlert, KeyRound, ArrowRight } from 'lucide-react';
+import { Lock, User, ShieldAlert, KeyRound, ArrowRight, Sun, Moon, Monitor } from 'lucide-react';
 import { api } from '@/services/api';
-import { usePreferences } from '@/components/PreferencesContext';
+import { usePreferences, Theme } from '@/components/PreferencesContext';
 
 export default function LoginPage() {
   const router = useRouter();
-  const { t } = usePreferences();
+  const { theme, setTheme, t } = usePreferences();
   const [activeTab, setActiveTab] = useState<'local' | 'sso'>('local');
   
   // Local Form state
@@ -124,6 +124,30 @@ export default function LoginPage() {
 
   return (
     <main className="min-h-screen bg-slate-950 flex items-center justify-center p-4 relative overflow-hidden">
+      {/* Floating Theme Selector */}
+      <div className="absolute top-6 right-6 z-20 flex bg-slate-900/40 backdrop-blur-md p-1 rounded-2xl border border-slate-800/80 shadow-lg">
+        {[
+          { name: 'light', icon: Sun, label: 'Light' },
+          { name: 'dark', icon: Moon, label: 'Dark' },
+          { name: 'system', icon: Monitor, label: 'System' }
+        ].map(th => {
+          const Icon = th.icon;
+          const isSelected = theme === th.name;
+          return (
+            <button
+              key={th.name}
+              onClick={() => setTheme(th.name as Theme)}
+              title={th.label}
+              className={`p-2 rounded-xl transition-all duration-300 cursor-pointer ${
+                isSelected ? 'bg-slate-800 text-purple-400 border border-purple-500/20' : 'text-slate-500 hover:text-slate-300'
+              }`}
+            >
+              <Icon className="w-4 h-4" />
+            </button>
+          );
+        })}
+      </div>
+
       {/* Background gradients */}
       <div className="absolute top-1/4 left-1/4 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-purple-600/20 rounded-full blur-[120px] pointer-events-none" />
       <div className="absolute bottom-1/4 right-1/4 translate-x-1/2 translate-y-1/2 w-96 h-96 bg-pink-500/15 rounded-full blur-[120px] pointer-events-none" />
@@ -152,7 +176,7 @@ export default function LoginPage() {
               onClick={() => setActiveTab('local')}
               className={`flex-1 py-2.5 text-xs font-semibold rounded-xl transition-all duration-300 ${
                 activeTab === 'local'
-                  ? 'bg-slate-800 text-white shadow-md'
+                  ? 'bg-slate-800 text-slate-200 shadow-md'
                   : 'text-slate-500 hover:text-slate-300'
               }`}
             >
@@ -163,7 +187,7 @@ export default function LoginPage() {
               onClick={() => setActiveTab('sso')}
               className={`flex-1 py-2.5 text-xs font-semibold rounded-xl transition-all duration-300 ${
                 activeTab === 'sso'
-                  ? 'bg-slate-800 text-white shadow-md'
+                  ? 'bg-slate-800 text-slate-200 shadow-md'
                   : 'text-slate-500 hover:text-slate-300'
               }`}
             >
@@ -273,7 +297,7 @@ export default function LoginPage() {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full bg-slate-800 hover:bg-slate-700 text-white font-semibold py-3 px-4 rounded-2xl border border-slate-700 transition-all duration-300 shadow-md active:scale-98 text-sm cursor-pointer disabled:opacity-50"
+                  className="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold py-3 px-4 rounded-2xl border border-slate-700 transition-all duration-300 shadow-md active:scale-98 text-sm cursor-pointer disabled:opacity-50"
                 >
                   {t('ssoLogin')}
                 </button>

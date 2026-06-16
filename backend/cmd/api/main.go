@@ -16,18 +16,24 @@ func main() {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	dbPath := os.Getenv("DATABASE_PATH")
-	if dbPath == "" {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			dbPath = filepath.Join(home, ".k6-bedrock-dashboard", "dashboard.db")
-		} else {
-			dbPath = "dashboard.db"
+	dbDriver := cfg.DBType
+	dbDSN := cfg.DBDSN
+
+	if dbDSN == "" {
+		dbPath := os.Getenv("DATABASE_PATH")
+		if dbPath == "" {
+			home, err := os.UserHomeDir()
+			if err == nil {
+				dbPath = filepath.Join(home, ".k6-bedrock-dashboard", "dashboard.db")
+			} else {
+				dbPath = "dashboard.db"
+			}
 		}
+		dbDSN = dbPath
 	}
 
-	log.Printf("Initializing database at: %s", dbPath)
-	db, err := database.InitDB(dbPath)
+	log.Printf("Initializing database driver %s at: %s", dbDriver, dbDSN)
+	db, err := database.InitDB(dbDriver, dbDSN)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}

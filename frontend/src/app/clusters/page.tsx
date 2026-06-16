@@ -44,7 +44,7 @@ export default function ClustersPage() {
   return (
     <div className="space-y-8 animate-fadeIn">
       <div>
-        <h2 className="text-3xl font-bold tracking-tight text-white">{t('clustersK8s')}</h2>
+        <h2 className="text-3xl font-bold tracking-tight text-slate-100">{t('clustersK8s')}</h2>
         <p className="text-slate-400 text-sm mt-1">
           {t('inspectClusters')}
         </p>
@@ -66,7 +66,19 @@ export default function ClustersPage() {
                     <HardDrive className="w-6 h-6" />
                   </div>
                   <div>
-                    <h3 className="text-lg font-bold text-white">{cluster.name}</h3>
+                    <div className="flex items-center space-x-2">
+                      <h3 className="text-lg font-bold text-slate-200">{cluster.name}</h3>
+                      {cluster.k6_operator_installed ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/15 text-purple-300 border border-purple-500/30" title="K6 Operator Installed">
+                          <span className="w-1.5 h-1.5 mr-1 rounded-full bg-purple-400"></span>
+                          k6 Operator
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800/80 text-slate-400 border border-slate-700/50" title="K6 Operator Not Installed">
+                          No Operator
+                        </span>
+                      )}
+                    </div>
                     <p className="text-xs text-slate-500 font-mono mt-0.5">{cluster.api_server_url}</p>
                   </div>
                 </div>
@@ -128,7 +140,7 @@ export default function ClustersPage() {
                 <button
                   onClick={() => handleVerify(cluster.id)}
                   disabled={verifyingMap[cluster.id] === 'verifying'}
-                  className="flex-1 flex items-center justify-center space-x-2 py-2.5 rounded-xl border border-slate-800 hover:border-slate-700 bg-slate-900/40 hover:bg-slate-800/40 text-slate-300 hover:text-white transition duration-300 text-xs font-semibold cursor-pointer disabled:opacity-50"
+                  className="flex-1 flex items-center justify-center space-x-2 py-2.5 rounded-xl border border-slate-800 hover:border-slate-700 bg-slate-900/40 hover:bg-slate-800/40 text-slate-300 hover:text-slate-100 transition duration-300 text-xs font-semibold cursor-pointer disabled:opacity-50"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${verifyingMap[cluster.id] === 'verifying' ? 'animate-spin' : ''}`} />
                   <span>{t('testConn')}</span>

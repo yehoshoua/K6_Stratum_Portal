@@ -45,26 +45,31 @@ func GenerateSalt() (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
-// LoginLocal validates local username/password against SQLite database and returns a JWT token if valid
-func (s *AuthService) LoginLocal(username, password string) (string, error) {
+// LoginLocal validates local username/password against SQLite database and returns a JWT token and user role if valid
+func (s *AuthService) LoginLocal(username, password string) (string, string, error) {
 	if s.db == nil {
-		return "", errors.New("database not initialized")
+		return "", "", errors.New("database not initialized")
 	}
 
 	user, err := s.db.GetUser(username)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if user == nil {
-		return "", errors.New("invalid credentials")
+		return "", "", errors.New("invalid credentials")
 	}
 
 	computedHash := HashPassword(password, user.Salt)
 	if computedHash != user.PasswordHash {
-		return "", errors.New("invalid credentials")
+		return "", "", errors.New("invalid credentials")
 	}
 
-	return s.GenerateToken(user.Username, user.Role)
+	token, err := s.GenerateToken(user.Username, user.Role)
+	if err != nil {
+		return "", "", err
+	}
+
+	return token, user.Role, nil
 }
 
 // GenerateToken generates a JWT token valid for 24 hours
@@ -106,8 +111,8 @@ func (s *AuthService) ValidateToken(tokenStr string) (string, string, error) {
 	return "", "", errors.New("invalid claims")
 }
 
-// HandleSSOCallback processes a mock SSO authentication and returns a token
-func (s *AuthService) HandleSSOCallback(ssoUser string, email string) (string, error) {
+// HandleSSOCallback processes a mock SSO authentication and returns a token and mapped role
+func (s *AuthService) HandleSSOCallback(ssoUser string, email string) (string, string, error) {
 	// Map SSO logins to appropriate roles
 	role := "viewer"
 	ssoUserLower := strings.ToLower(ssoUser)
@@ -117,6 +122,10 @@ func (s *AuthService) HandleSSOCallback(ssoUser string, email string) (string, e
 	} else if strings.Contains(ssoUserLower, "editor") || strings.Contains(emailLower, "editor") || strings.Contains(ssoUserLower, "technical") || strings.Contains(emailLower, "technical") {
 		role = "editor"
 	}
-	return s.GenerateToken(ssoUser, role)
+	token, err := s.GenerateToken(ssoUser, role)
+	if err != nil {
+		return "", "", err
+	}
+	return token, role, nil
 }
 

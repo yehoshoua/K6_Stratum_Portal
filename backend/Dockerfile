@@ -19,11 +19,8 @@ RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-w -s" -o dashboard-api ./cmd/ap
 # Final clean runtime stage
 FROM debian:bookworm-slim
 
-# Install ca-certificates and sqlite3 in case they are needed for migrations or https queries
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    sqlite3 \
-    && rm -rf /var/lib/apt/lists/*
+# Copy root CA certificates from the builder to support HTTPS in offline environments
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 WORKDIR /app
 

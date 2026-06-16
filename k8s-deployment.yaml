@@ -186,3 +186,4 @@ spec:
                 name: k6-stratum-portal-frontend-service
                 port:
                   number: 80
+

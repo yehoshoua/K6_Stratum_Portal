@@ -68,6 +68,8 @@ type TestRunSummary struct {
 	Duration  float64   `json:"duration_seconds"`
 	MaxVUs    float64   `json:"max_vus"`
 	AvgReqDur float64   `json:"avg_req_duration_ms"`
+	Cluster   string    `json:"cluster"`
+	Namespace string    `json:"namespace"`
 }
 
 // Ping checks if the InfluxDB server is reachable
@@ -145,13 +147,13 @@ func VerifyInfluxDBConnection(serverURL, version, token, username, password, met
 }
 
 // QueryK6Metrics retrieves time-series aggregates of K6 metrics for a specific test run
-func (s *MetricsService) QueryK6Metrics(ctx context.Context, testRunID string, metricName string, durationRange string) ([]TestMetricPoint, error) {
+func (s *MetricsService) QueryK6Metrics(ctx context.Context, testRunID string, metricName string, durationRange string, startTime string, stopTime string, cluster string, namespace string) ([]TestMetricPoint, error) {
 	if s.url == "" {
 		return []TestMetricPoint{}, nil
 	}
 
 	if s.version == "v1" {
-		return s.queryV1Metrics(ctx, testRunID, metricName, durationRange)
+		return s.queryV1Metrics(ctx, testRunID, metricName, durationRange, startTime, stopTime, cluster, namespace)
 	}
 
 	if s.client == nil {
@@ -160,16 +162,34 @@ func (s *MetricsService) QueryK6Metrics(ctx context.Context, testRunID string, m
 
 	queryAPI := s.client.QueryAPI(s.org)
 
+	var rangeClause string
+	if startTime != "" && stopTime != "" {
+		rangeClause = fmt.Sprintf("range(start: time(v: \"%s\"), stop: time(v: \"%s\"))", startTime, stopTime)
+	} else {
+		rangeClause = fmt.Sprintf("range(start: -%s)", durationRange)
+	}
+
+	var clusterFilter string
+	if cluster != "" {
+		clusterFilter = fmt.Sprintf(`|> filter(fn: (r) => r["cluster"] == "%s")`, cluster)
+	}
+	var namespaceFilter string
+	if namespace != "" {
+		namespaceFilter = fmt.Sprintf(`|> filter(fn: (r) => r["namespace"] == "%s")`, namespace)
+	}
+
 	// Flux query parameterized to prevent injection
 	fluxQuery := fmt.Sprintf(`
 		from(bucket: "%s")
-			|> range(start: -%s)
+			|> %s
 			|> filter(fn: (r) => r["_measurement"] == "%s")
 			|> filter(fn: (r) => r["test_run_id"] == "%s" or r["testrun"] == "%s" or r["scenario"] == "%s" or r["job_name"] == "%s")
+			%s
+			%s
 			|> filter(fn: (r) => r["_field"] == "value")
 			|> aggregateWindow(every: 5s, fn: mean, createEmpty: false)
 			|> yield(name: "mean")
-	`, s.bucket, durationRange, metricName, testRunID, testRunID, testRunID, testRunID)
+	`, s.bucket, rangeClause, metricName, testRunID, testRunID, testRunID, testRunID, clusterFilter, namespaceFilter)
 
 	result, err := queryAPI.Query(ctx, fluxQuery)
 	if err != nil {
@@ -203,9 +223,24 @@ func (s *MetricsService) QueryK6Metrics(ctx context.Context, testRunID string, m
 	return points, nil
 }
 
-func (s *MetricsService) queryV1Metrics(ctx context.Context, testRunID string, metricName string, durationRange string) ([]TestMetricPoint, error) {
+func (s *MetricsService) queryV1Metrics(ctx context.Context, testRunID string, metricName string, durationRange string, startTime string, stopTime string, cluster string, namespace string) ([]TestMetricPoint, error) {
 	// Map metrics duration syntax
-	q := fmt.Sprintf(`SELECT mean(value) FROM "%s" WHERE (test_run_id = '%s' OR testrun = '%s' OR scenario = '%s' OR job_name = '%s') AND time > now() - %s GROUP BY time(5s) fill(none)`, metricName, testRunID, testRunID, testRunID, testRunID, durationRange)
+	var timeFilter string
+	if startTime != "" && stopTime != "" {
+		timeFilter = fmt.Sprintf("time >= '%s' AND time <= '%s'", startTime, stopTime)
+	} else {
+		timeFilter = fmt.Sprintf("time > now() - %s", durationRange)
+	}
+
+	var tagFilters string
+	if cluster != "" {
+		tagFilters += fmt.Sprintf(" AND cluster = '%s'", cluster)
+	}
+	if namespace != "" {
+		tagFilters += fmt.Sprintf(" AND namespace = '%s'", namespace)
+	}
+
+	q := fmt.Sprintf(`SELECT mean(value) FROM "%s" WHERE (test_run_id = '%s' OR testrun = '%s' OR scenario = '%s' OR job_name = '%s')%s AND %s GROUP BY time(5s) fill(none)`, metricName, testRunID, testRunID, testRunID, testRunID, tagFilters, timeFilter)
 
 	u, err := url.Parse(s.url)
 	if err != nil {
@@ -326,7 +361,7 @@ func (s *MetricsService) ListTestRuns(ctx context.Context) ([]TestRunSummary, er
 		from(bucket: "%s")
 			|> range(start: -30d)
 			|> filter(fn: (r) => r["_measurement"] == "vus" or r["_measurement"] == "http_req_duration")
-			|> group(columns: ["test_run_id", "testrun", "scenario", "job_name", "_measurement"])
+			|> group(columns: ["test_run_id", "testrun", "scenario", "job_name", "_measurement", "cluster", "namespace"])
 			|> mean()
 	`, s.bucket)
 
@@ -357,13 +392,24 @@ func (s *MetricsService) ListTestRuns(ctx context.Context) ([]TestRunSummary, er
 			continue
 		}
 
-		summary, ok := runsMap[runID]
+		var clusterVal, namespaceVal string
+		if cObj := record.ValueByKey("cluster"); cObj != nil {
+			clusterVal = fmt.Sprintf("%v", cObj)
+		}
+		if nsObj := record.ValueByKey("namespace"); nsObj != nil {
+			namespaceVal = fmt.Sprintf("%v", nsObj)
+		}
+
+		key := fmt.Sprintf("%s|%s|%s", runID, clusterVal, namespaceVal)
+		summary, ok := runsMap[key]
 		if !ok {
 			summary = &TestRunSummary{
 				TestRunID: runID,
 				StartTime: record.Time(),
+				Cluster:   clusterVal,
+				Namespace: namespaceVal,
 			}
-			runsMap[runID] = summary
+			runsMap[key] = summary
 		}
 
 		val, _ := record.Value().(float64)
@@ -387,7 +433,10 @@ func (s *MetricsService) ListTestRuns(ctx context.Context) ([]TestRunSummary, er
 }
 
 func (s *MetricsService) listV1TestRuns(ctx context.Context) ([]TestRunSummary, error) {
-	q := `SELECT mean(value) FROM "vus" WHERE time > now() - 30d GROUP BY test_run_id, testrun, scenario, job_name`
+	q := `SELECT first(value) FROM "vus" WHERE time > now() - 30d GROUP BY test_run_id, testrun, scenario, job_name, cluster, namespace; ` +
+		`SELECT last(value) FROM "vus" WHERE time > now() - 30d GROUP BY test_run_id, testrun, scenario, job_name, cluster, namespace; ` +
+		`SELECT max(value) FROM "vus" WHERE time > now() - 30d GROUP BY test_run_id, testrun, scenario, job_name, cluster, namespace; ` +
+		`SELECT mean(value) FROM "http_req_duration" WHERE time > now() - 30d GROUP BY test_run_id, testrun, scenario, job_name, cluster, namespace`
 
 	u, err := url.Parse(s.url)
 	if err != nil {
@@ -434,66 +483,166 @@ func (s *MetricsService) listV1TestRuns(ctx context.Context) ([]TestRunSummary, 
 		return nil, err
 	}
 
-	var summaries []TestRunSummary
+	runsMap := make(map[string]*TestRunSummary)
+
+	extractRunID := func(tags map[string]string) string {
+		if runID := tags["test_run_id"]; runID != "" {
+			return runID
+		}
+		if runID := tags["testrun"]; runID != "" {
+			return runID
+		}
+		if runID := tags["scenario"]; runID != "" {
+			return runID
+		}
+		if runID := tags["job_name"]; runID != "" {
+			return runID
+		}
+		return ""
+	}
+
+	extractClusterNamespace := func(tags map[string]string) (string, string) {
+		return tags["cluster"], tags["namespace"]
+	}
+
+	parseTime := func(val interface{}) (time.Time, bool) {
+		if str, ok := val.(string); ok {
+			if t, err := time.Parse(time.RFC3339, str); err == nil {
+				return t, true
+			}
+		}
+		return time.Time{}, false
+	}
+
+	parseFloat := func(val interface{}) (float64, bool) {
+		switch v := val.(type) {
+		case float64:
+			return v, true
+		case float32:
+			return float64(v), true
+		case int64:
+			return float64(v), true
+		case int:
+			return float64(v), true
+		case json.Number:
+			if f, err := v.Float64(); err == nil {
+				return f, true
+			}
+		}
+		return 0, false
+	}
+
+	// 1. Process statement 0: Start times
 	if len(result.Results) > 0 && len(result.Results[0].Series) > 0 {
 		for _, series := range result.Results[0].Series {
-			runID := series.Tags["test_run_id"]
-			if runID == "" {
-				runID = series.Tags["testrun"]
-			}
-			if runID == "" {
-				runID = series.Tags["scenario"]
-			}
-			if runID == "" {
-				runID = series.Tags["job_name"]
-			}
-			if runID == "" {
+			runID := extractRunID(series.Tags)
+			if runID == "" || len(series.Values) == 0 {
 				continue
 			}
-
-			startTime := time.Now()
-			var maxVUs float64
-
-			timeIdx, valIdx := -1, -1
+			cluster, namespace := extractClusterNamespace(series.Tags)
+			key := fmt.Sprintf("%s|%s|%s", runID, cluster, namespace)
+			timeIdx := -1
 			for idx, col := range series.Columns {
 				if col == "time" {
 					timeIdx = idx
-				} else if col == "mean" || col == "value" {
-					valIdx = idx
+					break
 				}
 			}
-
-			if len(series.Values) > 0 {
-				row := series.Values[0]
-				if timeIdx != -1 && len(row) > timeIdx {
-					if timeStr, ok := row[timeIdx].(string); ok {
-						if t, err := time.Parse(time.RFC3339, timeStr); err == nil {
-							startTime = t
-						}
-					}
-				}
-				if valIdx != -1 && len(row) > valIdx {
-					switch v := row[valIdx].(type) {
-					case float64:
-						maxVUs = v
-					case float32:
-						maxVUs = float64(v)
-					case int64:
-						maxVUs = float64(v)
-					case int:
-						maxVUs = float64(v)
+			if timeIdx != -1 && len(series.Values[0]) > timeIdx {
+				if startTime, ok := parseTime(series.Values[0][timeIdx]); ok {
+					runsMap[key] = &TestRunSummary{
+						TestRunID: runID,
+						StartTime: startTime,
+						Cluster:   cluster,
+						Namespace: namespace,
 					}
 				}
 			}
-
-			summaries = append(summaries, TestRunSummary{
-				TestRunID: runID,
-				StartTime: startTime,
-				MaxVUs:    maxVUs,
-				Duration:  300, // standard mock fallback duration
-				AvgReqDur: 150, // standard mock fallback latency
-			})
 		}
+	}
+
+	// 2. Process statement 1: Stop times and calculate duration
+	if len(result.Results) > 1 && len(result.Results[1].Series) > 0 {
+		for _, series := range result.Results[1].Series {
+			runID := extractRunID(series.Tags)
+			cluster, namespace := extractClusterNamespace(series.Tags)
+			key := fmt.Sprintf("%s|%s|%s", runID, cluster, namespace)
+			summary, exists := runsMap[key]
+			if !exists || len(series.Values) == 0 {
+				continue
+			}
+			timeIdx := -1
+			for idx, col := range series.Columns {
+				if col == "time" {
+					timeIdx = idx
+					break
+				}
+			}
+			if timeIdx != -1 && len(series.Values[0]) > timeIdx {
+				if stopTime, ok := parseTime(series.Values[0][timeIdx]); ok {
+					diff := stopTime.Sub(summary.StartTime).Seconds()
+					if diff < 0 {
+						diff = 0
+					}
+					summary.Duration = diff
+				}
+			}
+		}
+	}
+
+	// 3. Process statement 2: Max VUs
+	if len(result.Results) > 2 && len(result.Results[2].Series) > 0 {
+		for _, series := range result.Results[2].Series {
+			runID := extractRunID(series.Tags)
+			cluster, namespace := extractClusterNamespace(series.Tags)
+			key := fmt.Sprintf("%s|%s|%s", runID, cluster, namespace)
+			summary, exists := runsMap[key]
+			if !exists || len(series.Values) == 0 {
+				continue
+			}
+			valIdx := -1
+			for idx, col := range series.Columns {
+				if col == "max" {
+					valIdx = idx
+					break
+				}
+			}
+			if valIdx != -1 && len(series.Values[0]) > valIdx {
+				if maxVUs, ok := parseFloat(series.Values[0][valIdx]); ok {
+					summary.MaxVUs = maxVUs
+				}
+			}
+		}
+	}
+
+	// 4. Process statement 3: Average Latency
+	if len(result.Results) > 3 && len(result.Results[3].Series) > 0 {
+		for _, series := range result.Results[3].Series {
+			runID := extractRunID(series.Tags)
+			cluster, namespace := extractClusterNamespace(series.Tags)
+			key := fmt.Sprintf("%s|%s|%s", runID, cluster, namespace)
+			summary, exists := runsMap[key]
+			if !exists || len(series.Values) == 0 {
+				continue
+			}
+			valIdx := -1
+			for idx, col := range series.Columns {
+				if col == "mean" {
+					valIdx = idx
+					break
+				}
+			}
+			if valIdx != -1 && len(series.Values[0]) > valIdx {
+				if avgReq, ok := parseFloat(series.Values[0][valIdx]); ok {
+					summary.AvgReqDur = avgReq
+				}
+			}
+		}
+	}
+
+	var summaries []TestRunSummary
+	for _, summary := range runsMap {
+		summaries = append(summaries, *summary)
 	}
 
 	return summaries, nil

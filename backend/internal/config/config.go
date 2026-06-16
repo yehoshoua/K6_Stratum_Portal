@@ -11,13 +11,15 @@ import (
 )
 
 type Config struct {
-	Port          string
-	EncryptionKey []byte
-	JWTSecret     []byte
-	InfluxURL     string
-	InfluxToken   string
-	InfluxOrg     string
-	InfluxBucket  string
+	Port             string
+	EncryptionKey    []byte
+	JWTSecret        []byte
+	InfluxURL        string
+	InfluxToken      string
+	InfluxOrg        string
+	InfluxBucket     string
+	DBType           string
+	DBDSN            string
 }
 
 func LoadConfig() (*Config, error) {
@@ -47,14 +49,22 @@ func LoadConfig() (*Config, error) {
 		jwtSecretStr = "super-secret-jwt-signing-key-for-k6-bedrock-dashboard"
 	}
 
+	dbType := os.Getenv("DB_TYPE")
+	if dbType == "" {
+		dbType = "sqlite"
+	}
+	dbDSN := os.Getenv("DATABASE_URL")
+
 	return &Config{
-		Port:          port,
-		EncryptionKey: encKey,
-		JWTSecret:     []byte(jwtSecretStr),
-		InfluxURL:     os.Getenv("INFLUXDB_URL"),
-		InfluxToken:   os.Getenv("INFLUXDB_TOKEN"),
-		InfluxOrg:     os.Getenv("INFLUXDB_ORG"),
-		InfluxBucket:  os.Getenv("INFLUXDB_BUCKET"),
+		Port:             port,
+		EncryptionKey:    encKey,
+		JWTSecret:        []byte(jwtSecretStr),
+		InfluxURL:        os.Getenv("INFLUXDB_URL"),
+		InfluxToken:      os.Getenv("INFLUXDB_TOKEN"),
+		InfluxOrg:        os.Getenv("INFLUXDB_ORG"),
+		InfluxBucket:     os.Getenv("INFLUXDB_BUCKET"),
+		DBType:           dbType,
+		DBDSN:            dbDSN,
 	}, nil
 }
 

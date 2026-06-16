@@ -1,5 +1,19 @@
 @import "tailwindcss";
 
+@theme {
+  --color-purple-900: var(--primary-dark);
+  --color-purple-600: var(--primary-hover);
+  --color-purple-500: var(--primary);
+  --color-purple-400: var(--primary-light);
+  --color-purple-300: var(--primary-lightest);
+  --color-pink-900: var(--accent-dark);
+  --color-pink-650: var(--accent-hover);
+  --color-pink-600: var(--accent-hover);
+  --color-pink-500: var(--accent);
+  --color-pink-400: var(--accent-light);
+  --color-pink-300: var(--accent-lightest);
+}
+
 /* Base / Dark Theme variables */
 :root, html[data-theme="dark"] {
   --background: #090d16;
@@ -8,9 +22,22 @@
   --card-border: rgba(30, 41, 59, 0.8);
   --sidebar-bg: #0b0f19;
   --input-bg: rgba(2, 6, 23, 0.8);
-  --primary: #a855f7;
+  --warning-bg: rgba(239, 68, 68, 0.1);
+  --warning-border: rgba(239, 68, 68, 0.3);
+  --warning-text: #fca5a5;
+  --button-text-light: #ffffff;
+
+  /* Theme variables mapped to palettes */
+  --primary-dark: #581c87;
   --primary-hover: #9333ea;
+  --primary: #a855f7;
+  --primary-light: #c084fc;
+  --primary-lightest: #e9d5ff;
+  --accent-dark: #831843;
+  --accent-hover: #db2777;
   --accent: #ec4899;
+  --accent-light: #f472b6;
+  --accent-lightest: #fbcfe8;
 }
 
 /* Light Theme variables & Tailwind Slate overrides */
@@ -21,9 +48,21 @@ html[data-theme="light"] {
   --card-border: #cbd5e1;
   --sidebar-bg: #ffffff;
   --input-bg: #ffffff;
-  --primary: #8b5cf6;
-  --primary-hover: #7c3aed;
-  --accent: #db2777;
+  --warning-bg: #fef2f2;
+  --warning-border: #fca5a5;
+  --warning-text: #991b1b;
+  --button-text-light: #ffffff;
+
+  --primary-dark: #4c1d95;       /* violet-900 */
+  --primary-hover: #6d28d9;      /* violet-700 */
+  --primary: #7c3aed;            /* violet-600 */
+  --primary-light: #6d28d9;      /* violet-700 (darker for text readability) */
+  --primary-lightest: #7c3aed;   /* violet-600 */
+  --accent-dark: #831843;        /* pink-900 */
+  --accent-hover: #be185d;       /* pink-700 */
+  --accent: #db2777;             /* pink-600 */
+  --accent-light: #be185d;       /* pink-700 (darker for text readability) */
+  --accent-lightest: #db2777;    /* pink-600 */
 
   /* Redefine Tailwind's slate color variables dynamically for light mode */
   --color-slate-950: #f1f5f9; /* main dashboard background */
@@ -34,13 +73,91 @@ html[data-theme="light"] {
   --color-slate-600: #64748b;
   --color-slate-500: #475569;
   --color-slate-400: #334155; /* text-slate-400 (muted text) */
-  --color-slate-300: #1e293b;
+  --color-slate-300: #1e293b; /* text-slate-300 (regular text) */
   --color-slate-200: #0f172a; /* text-slate-200 (regular text) */
   --color-slate-100: #0f172a;
   --color-slate-50: #0f172a;
   --color-white: #0f172a;      /* text-white becomes dark slate text */
+
+  /* Status overrides for readability in light mode */
+  --color-emerald-400: #059669; /* emerald-600 */
+  --color-emerald-300: #10b981; /* emerald-500 */
+  --color-blue-400: #2563eb;    /* blue-600 */
+  --color-blue-300: #3b82f6;    /* blue-500 */
+  --color-red-400: #dc2626;     /* red-600 */
+  --color-red-300: #ef4444;     /* red-500 */
+  --color-amber-400: #d97706;   /* amber-600 */
+  --color-amber-300: #f59e0b;   /* amber-500 */
 }
 
+/* Ensure text-white on colored backgrounds (gradients, active tabs, buttons) remains white in light mode */
+html[data-theme="light"] [class*="bg-purple-"],
+html[data-theme="light"] [class*="bg-pink-"],
+html[data-theme="light"] [class*="bg-violet-"],
+html[data-theme="light"] [class*="bg-blue-"],
+html[data-theme="light"] [class*="bg-red-"],
+html[data-theme="light"] [class*="bg-emerald-"],
+html[data-theme="light"] [class*="bg-gradient-"] {
+  --color-white: #ffffff;
+}
+
+/* Color Palettes */
+
+/* Ocean Blue Serenity */
+html[data-palette="ocean-blue"] {
+  --primary-dark: #03045e !important;
+  --primary-hover: #023e8a !important;
+  --primary: #0077b6 !important;
+  --primary-light: #00b4d8 !important;
+  --primary-lightest: #90e0ef !important;
+  --accent-dark: #023e8a !important;
+  --accent-hover: #0077b6 !important;
+  --accent: #00b4d8 !important;
+  --accent-light: #90e0ef !important;
+  --accent-lightest: #caf0f8 !important;
+}
+
+/* Gradient Blues */
+html[data-palette="gradient-blues"] {
+  --primary-dark: #003d4c !important;
+  --primary-hover: #005f73 !important;
+  --primary: #0a9396 !important;
+  --primary-light: #94d2bd !important;
+  --primary-lightest: #cae9e0 !important;
+  --accent-dark: #005f73 !important;
+  --accent-hover: #0a9396 !important;
+  --accent: #94d2bd !important;
+  --accent-light: #cae9e0 !important;
+  --accent-lightest: #e9d8a6 !important;
+}
+
+/* Blue Serenity */
+html[data-palette="blue-serenity"] {
+  --primary-dark: #112244 !important;
+  --primary-hover: #1e4f8c !important;
+  --primary: #3a76b0 !important;
+  --primary-light: #a7c6ed !important;
+  --primary-lightest: #d7e3fc !important;
+  --accent-dark: #1a365d !important;
+  --accent-hover: #3a76b0 !important;
+  --accent: #a7c6ed !important;
+  --accent-light: #d7e3fc !important;
+  --accent-lightest: #edf2fb !important;
+}
+
+/* Golden Harvest */
+html[data-palette="golden-harvest"] {
+  --primary-dark: #5d4508 !important;
+  --primary-hover: #a47e1b !important;
+  --primary: #edc531 !important;
+  --primary-light: #ffe169 !important;
+  --primary-lightest: #fbf6cf !important;
+  --accent-dark: #7a5a0c !important;
+  --accent-hover: #edc531 !important;
+  --accent: #ffe169 !important;
+  --accent-light: #fbf6cf !important;
+  --accent-lightest: #fffae0 !important;
+}
 
 /* System-based styling selectors */
 @media (prefers-color-scheme: light) {
@@ -51,9 +168,20 @@ html[data-theme="light"] {
     --card-border: #cbd5e1;
     --sidebar-bg: #ffffff;
     --input-bg: #ffffff;
-    --primary: #8b5cf6;
-    --primary-hover: #7c3aed;
-    --accent: #db2777;
+    --primary-dark: #4c1d95;       /* violet-900 */
+    --primary-hover: #6d28d9;      /* violet-700 */
+    --primary: #7c3aed;            /* violet-600 */
+    --primary-light: #6d28d9;      /* violet-700 (darker for text readability) */
+    --primary-lightest: #7c3aed;   /* violet-600 */
+    --accent-dark: #831843;        /* pink-900 */
+    --accent-hover: #be185d;       /* pink-700 */
+    --accent: #db2777;             /* pink-600 */
+    --accent-light: #be185d;       /* pink-700 (darker for text readability) */
+    --accent-lightest: #db2777;    /* pink-600 */
+    --warning-bg: #fef2f2;
+    --warning-border: #fca5a5;
+    --warning-text: #991b1b;
+    --button-text-light: #ffffff;
 
     --color-slate-950: #f1f5f9;
     --color-slate-900: #ffffff;
@@ -68,6 +196,27 @@ html[data-theme="light"] {
     --color-slate-100: #0f172a;
     --color-slate-50: #0f172a;
     --color-white: #0f172a;
+
+    /* Status overrides for readability in light mode */
+    --color-emerald-400: #059669; /* emerald-600 */
+    --color-emerald-300: #10b981; /* emerald-500 */
+    --color-blue-400: #2563eb;    /* blue-600 */
+    --color-blue-300: #3b82f6;    /* blue-500 */
+    --color-red-400: #dc2626;     /* red-600 */
+    --color-red-300: #ef4444;     /* red-500 */
+    --color-amber-400: #d97706;   /* amber-600 */
+    --color-amber-300: #f59e0b;   /* amber-500 */
+  }
+
+  /* Ensure text-white on colored backgrounds (gradients, active tabs, buttons) remains white in light system mode */
+  html[data-theme="system"] [class*="bg-purple-"],
+  html[data-theme="system"] [class*="bg-pink-"],
+  html[data-theme="system"] [class*="bg-violet-"],
+  html[data-theme="system"] [class*="bg-blue-"],
+  html[data-theme="system"] [class*="bg-red-"],
+  html[data-theme="system"] [class*="bg-emerald-"],
+  html[data-theme="system"] [class*="bg-gradient-"] {
+    --color-white: #ffffff;
   }
 }
 @media (prefers-color-scheme: dark) {
@@ -78,9 +227,20 @@ html[data-theme="light"] {
     --card-border: rgba(30, 41, 59, 0.8);
     --sidebar-bg: #0b0f19;
     --input-bg: rgba(2, 6, 23, 0.8);
-    --primary: #a855f7;
+    --primary-dark: #581c87;
     --primary-hover: #9333ea;
+    --primary: #a855f7;
+    --primary-light: #c084fc;
+    --primary-lightest: #e9d5ff;
+    --accent-dark: #831843;
+    --accent-hover: #db2777;
     --accent: #ec4899;
+    --accent-light: #f472b6;
+    --accent-lightest: #fbcfe8;
+    --warning-bg: rgba(239, 68, 68, 0.1);
+    --warning-border: rgba(239, 68, 68, 0.3);
+    --warning-text: #fca5a5;
+    --button-text-light: #ffffff;
   }
 }
 
@@ -91,4 +251,12 @@ body {
   min-height: 100vh;
 }
 
+.critical-warning-box {
+  background-color: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  color: var(--warning-text);
+}
 
+.btn-text-always-light {
+  color: var(--button-text-light) !important;
+}
