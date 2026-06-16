@@ -1,6 +1,6 @@
-# Walkthrough - K6 Observability, Native Scheduling & S3 Reporting System
+# Walkthrough - K6 Observability & Native Scheduling
 
-We have successfully migrated the portal scheduler to native Kubernetes `Job` and `CronJob` execution, implemented active schedule toggle controls (Pause/Resume), replaced native browser alerts with custom centered confirmation dialogs, and built a stateless S3-compatible HTML report archiving and embedded viewer subsystem.
+We have successfully migrated the portal scheduler to native Kubernetes `Job` and `CronJob` execution, implemented active schedule toggle controls (Pause/Resume), and replaced native browser alerts with custom centered confirmation dialogs.
 
 ---
 
@@ -20,18 +20,6 @@ We have successfully migrated the portal scheduler to native Kubernetes `Job` an
 ### 3. Custom Centered Confirmation Dialogs
 - **Premium Design**: Replaced raw browser-native `confirm()` popups. Built a custom centered modal that uses the dashboard's glassmorphism style, dark color scheme, and purple-to-pink gradient accents.
 
-### 4. S3 HTML Report Archiving Service (`report-service/`)
-- **Stateless Design**: Created a stateless Go microservice (`report-service`) that handles all HTML report storage using S3 (AWS or MinIO). 
-  - Lists and groups reports by parsing the S3 key structure `reports/{cluster_id}/{namespace}/{template_id}/{run_name}_{timestamp}.html` without needing any SQL database storage.
-- **Sidecar Job Archiver**: Injected an uploader container running `curlimages/curl` into spawned Jobs. The `k6-runner` container writes the HTML report to a shared `emptyDir` volume using `--out web-dashboard=export=/report/report.html`. The sidecar polls for the file and uploads it with metadata to the S3 bucket.
-- **Embedded UI Viewer**: Built a premium `/reports` page in Next.js showing runs grouped by cluster. Integrates a custom modal that embeds the HTML dashboard in an iframe with toggleable fullscreen.
-
----
-
-## 🛠️ Frontend Proxy Routing Upgrade
-- **[NEW] [proxy.ts](file:///Users/yehoshouad/tmp/perso/k6-stratum-portal/frontend/src/proxy.ts)**: Configured Next.js's new `proxy` file convention (`src/proxy.ts`) to route `/api/reports/*` requests to the `REPORT_SERVICE_URL` and all other `/api/*` requests to `BACKEND_URL`. 
-- **Dynamic Resolution**: Because `proxy.ts` executes dynamically for each request at runtime (Edge runtime level), it evaluates variables such as `BACKEND_URL` and `REPORT_SERVICE_URL` dynamically, preventing Next.js build-time caching which would freeze values to local fallbacks.
-
 ---
 
 ## 🔍 Verification & Running Checks
@@ -41,21 +29,15 @@ We have successfully migrated the portal scheduler to native Kubernetes `Job` an
   ```bash
   go build -v ./...
   ```
-- **Go Report Service (`report-service/`)**: Compiles cleanly:
-  ```bash
-  go build -v .
-  ```
 - **Next.js Frontend (`frontend/`)**: Bundles successfully with all TypeScript types passing:
   ```bash
   npm run build
   ```
 
 ### 2. Docker Compose Integration
-- Added local `minio` and `report-service` containers to `docker-compose.yaml`.
-- Configured Caddy proxy paths to route `/api/reports` and `/api/reports/*` to the S3 uploader service.
+- Configured Caddy proxy paths to route requests to the frontend and backend services.
 - To run the entire environment locally:
   ```bash
   docker-compose up --build
   ```
   - Portal Frontend will be accessible at: `https://localhost` (or `http://localhost`).
-  - MinIO Storage Console will be accessible at: `http://localhost:9001` (User: `minioadmin`, Pass: `minioadmin`).
