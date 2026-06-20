@@ -1,10 +1,10 @@
 ---
 name: k6-stratum-portal-integrator
 description: >-
-  Guide for integrating secure API token authorization, role-based access control, load test relaunch pipelines, and multilingual settings modals within the K6 Stratum dashboard.
+  Guide for integrating secure API token authorization, role-based access control, load test relaunch pipelines, and multilingual settings modals within the K6 Stratos dashboard.
 ---
 
-# K6 Stratum Portal Integrator
+# K6 Stratos Integrator
 
 ## Overview
 This skill provides architectural guidelines and step-by-step workflows for implementing secure API token mechanisms, role-based access control (RBAC), and Kubernetes test execution pipelines.

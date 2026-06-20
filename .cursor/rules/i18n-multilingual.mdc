@@ -1,0 +1,68 @@
+---
+description: Require all user-visible text in en, fr, he, zh
+globs: frontend/**/*.{tsx,ts}
+alwaysApply: false
+---
+
+# Multilingual UI (en / fr / he / zh)
+
+All user-visible text must be available in all four supported locales.
+
+## Supported locales
+
+Use the existing `Language` type: `en`, `fr`, `he`, `zh`. Do not add other languages without updating the type and all dictionaries.
+
+## Translation source
+
+- Import `usePreferences()` and call `t('key')` for every user-visible string: labels, buttons, toasts, errors, placeholders, tooltips, page titles, and metadata.
+- Dictionary lives in `frontend/src/components/PreferencesContext.tsx`.
+- When adding a key, add it to **all four** locale objects (`en`, `fr`, `he`, `zh`) in the same edit.
+
+## Forbidden patterns
+
+```tsx
+// BAD — hardcoded English
+<button>Export PDF</button>
+
+// BAD — fallback masks missing keys
+{t('confirm') || 'Confirm'}
+
+// GOOD
+<button>{t('exportPdf')}</button>
+// + add exportPdf (and confirm if needed) to en/fr/he/zh blocks
+```
+
+- No hardcoded UI strings in JSX, props, or alerts.
+- No `{t('x') || 'Fallback'}` — add the key to all locales instead.
+
+## Dynamic text
+
+- Use template keys with placeholders (e.g. `deleteTemplateConfirm: "Delete {name}?"`) and extend `t()` to accept optional params: `t('deleteConfirm', { name })`.
+- Never duplicate English in confirm dialogs when a translation key already exists.
+
+## Hebrew RTL
+
+- Set `dir={lang === 'he' ? 'rtl' : 'ltr'}` on page shells (see `LayoutWrapper.tsx`).
+- Update root `<html lang={lang}>` in `layout.tsx` when language changes.
+- Apply RTL to login and all standalone pages, not only the authenticated shell.
+
+## Dates and numbers
+
+Pass the user's locale to formatting calls:
+
+```tsx
+date.toLocaleDateString(lang)
+date.toLocaleString(lang)
+```
+
+## Backend errors
+
+Map API error codes or known messages client-side via `t()`. Do not display raw Go error strings from the API.
+
+## Review checklist
+
+Before finishing frontend UI work:
+
+1. Grep changed files for quoted strings outside `t()` calls.
+2. Verify new keys exist in all four locale blocks.
+3. Confirm Hebrew pages set `dir` correctly.

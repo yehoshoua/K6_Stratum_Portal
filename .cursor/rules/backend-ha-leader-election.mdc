@@ -1,0 +1,86 @@
+---
+description: HA patterns for DB-interacting backend singleton workers
+globs: backend/**/*.go
+alwaysApply: false
+---
+
+# Backend HA with Leader Election
+
+Multi-replica backend deployments must avoid duplicate DB writes from background workers.
+
+## HA prerequisite
+
+- Multi-replica backend requires `DB_TYPE=postgres` and a shared `DATABASE_URL`.
+- SQLite (`DATABASE_PATH`) is for dev and single-replica deployments only.
+- All replicas must share identical `JWT_SECRET` and `ENCRYPTION_KEY`.
+
+## Multi-active vs singleton
+
+| Component | Mode | Notes |
+|---|---|---|
+| REST CRUD handlers (`server.go`) | Multi-active | Safe behind a load balancer with shared Postgres |
+| Auth (`auth.go`) | Multi-active | Stateless JWT/API-token validation |
+| K8s / Influx clients | Multi-active | Per-pod caches are acceptable |
+| Schedule runner (`scheduler.go`) | **Leader only** | Polls DB and creates TestRun CRDs |
+| SLA alert writer (`server.go`) | **Leader only** | Writes `test_alerts` rows in background |
+
+Any new goroutine or ticker that reads/writes the DB on a schedule must run **only on the elected leader**.
+
+## Leader election — Kubernetes Lease
+
+Use `k8s.io/client-go/tools/leaderelection` with `coordination.k8s.io/v1` Lease:
+
+- **Lock name:** `k6-stratum-portal-backend-leader`
+- **Namespace:** pod namespace via env `POD_NAMESPACE`
+- **Identity:** pod name via env `HOSTNAME`
+
+Wire lifecycle in `backend/cmd/api/main.go`:
+
+- `OnStartedLeading` → start singleton workers (scheduler, alert evaluator)
+- `OnStoppedLeading` → cancel context, stop tickers, drain in-flight work
+
+## RBAC
+
+Add Lease permissions to `k8s-deployment.yaml` ClusterRole:
+
+```yaml
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "create", "update", "patch"]
+```
+
+## Migrations and schema init
+
+- Do not run DDL from every replica via `createTables()` on startup.
+- Run migrations once: external migration Job, or leader-only init with advisory coordination.
+
+## Health probes
+
+Add before scaling replicas:
+
+- `GET /healthz` — liveness (process alive)
+- `GET /readyz` — readiness (DB connection OK)
+
+## Deployment changes
+
+When moving to HA:
+
+- Backend `replicas: 2+`, `strategy: RollingUpdate` (replace `Recreate`)
+- Remove SQLite PVC volume mounts when using Postgres
+- Configure connection pool in `database.InitDB`: `SetMaxOpenConns`, `SetMaxIdleConns`, `SetConnMaxLifetime`
+
+## Architecture
+
+```
+PodA ──try acquire──► K8s Lease ◄──try acquire── PodB
+                         │
+              leader only│
+                         ▼
+              ScheduleRunner + SLAAlertWriter
+                         │
+                         ▼
+                     PostgreSQL
+
+PodA ──all replicas──► REST handlers ──► PostgreSQL
+PodB ──all replicas──► REST handlers ──► PostgreSQL
+```

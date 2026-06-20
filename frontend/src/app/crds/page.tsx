@@ -11,9 +11,11 @@ import {
   FileCode2,
   Calendar,
   X,
+  Edit,
   Compass
 } from 'lucide-react';
-import { api, ClusterConfig, K6CRD, K6Template, K8sPod } from '@/services/api';
+import { api, ClusterConfig, EcrCheck, K6CRD, K6Template, K8sPod, RunDefaults } from '@/services/api';
+import { defaultRunnerImage, resolveClusterImage, clusterImageContext, needsResolvedRunnerImage } from '@/utils/clusterImage';
 import { usePreferences } from '@/components/PreferencesContext';
 
 function cleanK8sObject(obj: any): any {
@@ -72,7 +74,7 @@ function jsonToYaml(val: any, depth = 0): string {
 }
 
 export default function CRDsPage() {
-  const { t } = usePreferences();
+  const { t, lang } = usePreferences();
   const [clusters, setClusters] = useState<ClusterConfig[]>([]);
   const [selectedClusterId, setSelectedClusterId] = useState('');
   const [namespace, setNamespace] = useState('default');
@@ -153,7 +155,37 @@ export default function () {
   sleep(1);
 }`;
 
-  const DEFAULT_RUN_CONFIG = {
+  const DEFAULT_OUTPUT_ARGS = '--out influxdb=http://grafana-hub-influxdb.grafana-hub.svc.cluster.local:8086/k6s';
+  const [runDefaults, setRunDefaults] = useState<RunDefaults>({
+    output_args: DEFAULT_OUTPUT_ARGS,
+    use_output: false,
+    use_image: false,
+    image_url: '',
+    env_vars: [],
+  });
+
+  useEffect(() => {
+    api.getRunDefaults().then(d => setRunDefaults({ ...d, env_vars: d.env_vars || [] })).catch(() => {/* use local defaults */});
+  }, []);
+
+  const selectedCluster = clusters.find((c) => c.id === selectedClusterId);
+
+  const runnerImagePlaceholder = React.useMemo(
+    () => defaultRunnerImage(selectedCluster),
+    [selectedCluster],
+  );
+
+  const resolvedCustomImage = React.useCallback((imageOverride?: string) => {
+    const ctx = clusterImageContext(selectedCluster);
+    if (imageOverride?.trim()) {
+      return resolveClusterImage(imageOverride, ctx);
+    }
+    return runDefaults.image_url
+      ? resolveClusterImage(runDefaults.image_url, ctx)
+      : runnerImagePlaceholder;
+  }, [runDefaults.image_url, runnerImagePlaceholder, selectedCluster]);
+
+  const buildDefaultRunConfig = React.useCallback(() => ({
     name: 'k6-load-test-run',
     parallelism: 1,
     scriptName: 'k6-test-script',
@@ -162,20 +194,42 @@ export default function () {
     memLimit: '1Gi',
     scriptContent: DEFAULT_SCRIPT_TEMPLATE,
     useArguments: false,
-    argumentsText: '--out influxdb=http://grafana-hub-influxdb.grafana-hub.svc.cluster.local:8086/k6s',
-    useCustomImage: false,
-    awsAccountId: '107435627496',
-    awsRegion: 'us-east-1',
-    customImage: '107435627496.dkr.ecr.us-east-1.amazonaws.com/rem-helm-images/rem-apps/xk6:v1.1'
-  };
+    argumentsText: runDefaults.output_args || '--out influxdb=http://grafana-hub-influxdb.grafana-hub.svc.cluster.local:8086/k6s',
+    useCustomImage: runDefaults.use_image,
+    customImage: resolvedCustomImage(),
+  }), [runDefaults, resolvedCustomImage]);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [newRun, setNewRun] = useState(DEFAULT_RUN_CONFIG);
+  const [newRun, setNewRun] = useState(buildDefaultRunConfig);
+  const [editingCrd, setEditingCrd] = useState<K6CRD | null>(null);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  const [cronExpression, setCronExpression] = useState('');
+  const [ecrCheck, setEcrCheck] = useState<EcrCheck | null>(null);
+  const [checkingEcr, setCheckingEcr] = useState(false);
 
   const [templates, setTemplates] = useState<K6Template[]>([]);
   const [userRole, setUserRole] = useState('viewer');
+
+  useEffect(() => {
+    if (!isModalOpen) {
+      setNewRun(buildDefaultRunConfig());
+    }
+  }, [buildDefaultRunConfig, isModalOpen]);
+
+  useEffect(() => {
+    if (!isModalOpen || editingCrd) {
+      return;
+    }
+    const nextImage = resolvedCustomImage();
+    setNewRun(prev => (
+      prev.customImage === nextImage || needsResolvedRunnerImage(prev.customImage)
+        ? { ...prev, customImage: nextImage }
+        : prev
+    ));
+  }, [isModalOpen, editingCrd, resolvedCustomImage, selectedClusterId]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -195,12 +249,112 @@ export default function () {
     }
   };
 
+  const handleStartNewRun = () => {
+    setEditingCrd(null);
+    setScheduleEnabled(false);
+    setCronExpression('');
+    setScriptSource('manual');
+    setNewRun(buildDefaultRunConfig());
+    setIsModalOpen(true);
+  };
+
+  const handleStartEditRun = (crd: K6CRD) => {
+    const spec = crd.spec || {};
+    const runner = spec.runner || {};
+    const limits = runner.resources?.limits || {};
+    const argsText = typeof spec.arguments === 'string' ? spec.arguments : '';
+    const scriptConfig = spec.script?.configMap || {};
+    const scriptName = scriptConfig.name || '';
+    const scriptFile = scriptConfig.file || 'script.js';
+
+    setEditingCrd(crd);
+    setScheduleEnabled(false);
+    setCronExpression('');
+    setScriptSource(scriptName ? 'existing' : 'manual');
+    setNewRun({
+      ...buildDefaultRunConfig(),
+      name: crd.metadata?.name || '',
+      parallelism: Number(spec.parallelism || 1),
+      scriptName,
+      scriptFile,
+      cpuLimit: limits.cpu || '1000m',
+      memLimit: limits.memory || '1Gi',
+      useArguments: argsText.trim() !== '',
+      argumentsText: argsText || buildDefaultRunConfig().argumentsText,
+      useCustomImage: !!runner.image,
+      customImage: runner.image || buildDefaultRunConfig().customImage,
+    });
+    setIsModalOpen(true);
+  };
+
   useEffect(() => {
     if (isModalOpen) {
       loadTemplates();
-      setScriptSource('manual');
+      if (!editingCrd) {
+        setScriptSource('manual');
+        setSelectedTemplateId('');
+        setScheduleEnabled(false);
+        setCronExpression('');
+      }
+      setEcrCheck(null);
     }
-  }, [isModalOpen]);
+  }, [editingCrd, isModalOpen]);
+
+  useEffect(() => {
+    if (!newRun.useCustomImage || !newRun.customImage || !selectedClusterId) {
+      setEcrCheck(null);
+      setCheckingEcr(false);
+      return;
+    }
+
+    let cancelled = false;
+    setCheckingEcr(true);
+    const timer = setTimeout(() => {
+      api.checkEcrRepo(selectedClusterId, newRun.customImage)
+        .then((data) => {
+          if (!cancelled) {
+            setEcrCheck(data);
+          }
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setEcrCheck({
+              exists: false,
+              repository: '',
+              registry: '',
+              image: newRun.customImage,
+              message: err.message || t('ecrCheckFailed'),
+            });
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setCheckingEcr(false);
+          }
+        });
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [newRun.useCustomImage, newRun.customImage, selectedClusterId]);
+
+  const ecrHelper = React.useMemo(() => {
+    if (!ecrCheck || !selectedCluster?.region || !ecrCheck.registry || !ecrCheck.image) {
+      return null;
+    }
+    const region = selectedCluster.region;
+    const registry = ecrCheck.registry;
+    const repository = ecrCheck.repository || 'xk6';
+    const localImage = newRun.customImage || ecrCheck.image;
+    return {
+      login: `aws ecr get-login-password --region ${region} | docker login --username AWS --password-stdin ${registry}`,
+      ensureRepo: `aws ecr describe-repositories --region ${region} --repository-names ${repository} || aws ecr create-repository --region ${region} --repository-name ${repository}`,
+      tag: `docker tag ${localImage} ${ecrCheck.image}`,
+      push: `docker push ${ecrCheck.image}`,
+    };
+  }, [ecrCheck, selectedCluster?.region, newRun.customImage]);
 
   const loadInitialData = async () => {
     try {
@@ -214,25 +368,6 @@ export default function () {
       console.error(err);
     }
   };
-
-  const handleAwsAccountOrRegionChange = (accountId: string, region: string) => {
-    setNewRun(prev => ({
-      ...prev,
-      awsAccountId: accountId,
-      awsRegion: region,
-      customImage: `${accountId}.dkr.ecr.${region}.amazonaws.com/rem-helm-images/rem-apps/xk6:v1.1`
-    }));
-  };
-
-  useEffect(() => {
-    const selectedCluster = clusters.find(c => c.id === selectedClusterId);
-    const region = selectedCluster?.region || 'us-east-1';
-    setNewRun(prev => ({
-      ...prev,
-      awsRegion: region,
-      customImage: `${prev.awsAccountId}.dkr.ecr.${region}.amazonaws.com/rem-helm-images/rem-apps/xk6:v1.1`
-    }));
-  }, [selectedClusterId, clusters]);
 
   useEffect(() => {
     loadInitialData();
@@ -258,7 +393,7 @@ export default function () {
       console.error('Failed to load CRDs', err);
       setCrds([]);
       setSelectedCrd(null);
-      setError(err.message || 'Failed to fetch K6 CRDs');
+      setError(err.message || t('fetchCrdsFailed'));
     } finally {
       setLoading(false);
     }
@@ -340,10 +475,10 @@ export default function () {
         selectedCrd.metadata.namespace || namespace,
         false
       );
-      setPodLogsText(logs || 'No logs returned.');
+      setPodLogsText(logs || t('noLogsReturned'));
     } catch (err: any) {
       console.error(err);
-      setLogsError(err.message || 'Failed to fetch pod logs. Make sure the pod is created and running.');
+      setLogsError(err.message || t('podLogsFailed'));
     } finally {
       setLoadingLogs(false);
     }
@@ -405,7 +540,7 @@ export default function () {
 
   const handleNamespaceChange = (val: string) => {
     if (val === '__custom__') {
-      const customNs = prompt('Enter custom namespace:');
+      const customNs = prompt(t('enterCustomNamespace'));
       if (customNs && customNs.trim()) {
         const cleanNs = customNs.trim();
         if (!namespaces.includes(cleanNs)) {
@@ -420,8 +555,8 @@ export default function () {
 
   const handleDeleteCRD = async (name: string, ns?: string) => {
     requestConfirm(
-      t('delete') || 'Delete',
-      <span>{t('delete') || 'Delete'} <strong className="font-semibold text-slate-200">{name}</strong>?</span>,
+      t('deleteResourceTitle'),
+      <span>{t('deleteResourceConfirm', { name })}</span>,
       async () => {
         try {
           await api.deleteCRD(selectedClusterId, name, ns || namespace);
@@ -430,7 +565,7 @@ export default function () {
             setSelectedCrd(null);
           }
         } catch (err) {
-          showToast('Error deleting resource', 'error');
+          showToast(t('resourceDeleteError'), 'error');
         }
       }
     );
@@ -438,8 +573,8 @@ export default function () {
 
   const handleDeleteConfigMap = async (name: string, ns?: string) => {
     requestConfirm(
-      t('delete') || 'Delete',
-      <span>{t('delete') || 'Delete'} <strong className="font-semibold text-slate-200">{name}</strong>?</span>,
+      t('deleteConfigMapTitle'),
+      <span>{t('deleteConfigMapConfirm', { name })}</span>,
       async () => {
         try {
           await api.deleteConfigMap(selectedClusterId, name, ns || namespace);
@@ -448,9 +583,9 @@ export default function () {
             setSelectedConfigMap(null);
             setConfigMapData(null);
           }
-          showToast('ConfigMap deleted successfully!', 'success');
+          showToast(t('configMapDeleted'), 'success');
         } catch (err) {
-          showToast('Error deleting ConfigMap', 'error');
+          showToast(t('configMapDeleteError'), 'error');
         }
       }
     );
@@ -458,8 +593,8 @@ export default function () {
 
   const handleRelaunchCRD = async (crd: K6CRD) => {
     requestConfirm(
-      'Relaunch Test',
-      <span>Relaunch test <strong className="font-semibold text-slate-200">{crd.metadata.name}</strong>? This will delete the current resource and re-deploy it.</span>,
+      t('relaunchTestTitle'),
+      <span>{t('relaunchTestConfirm', { name: crd.metadata.name })}</span>,
       async () => {
         try {
           setRelaunching(true);
@@ -473,10 +608,10 @@ export default function () {
           // Select the new one
           setSelectedCrd(reCreated);
           
-          showToast(`Successfully relaunched ${crd.metadata.name}`, 'success');
+          showToast(t('relaunchSuccess', { name: crd.metadata.name }), 'success');
         } catch (err: any) {
           console.error(err);
-          showToast(`Failed to relaunch: ${err.message || 'Unknown error'}`, 'error');
+          showToast(t('relaunchFailed', { message: err.message || t('unknownError') }), 'error');
         } finally {
           setRelaunching(false);
         }
@@ -505,10 +640,10 @@ export default function () {
         };
       });
       setEditingConfigMapFile(null);
-      showToast('ConfigMap updated successfully!', 'success');
+      showToast(t('configMapUpdated'), 'success');
     } catch (err: any) {
       console.error(err);
-      showToast(`Failed to save ConfigMap: ${err.message || 'Unknown error'}`, 'error');
+      showToast(t('configMapUpdateFailed', { message: err.message || t('unknownError') }), 'error');
     } finally {
       setSavingConfigMap(false);
     }
@@ -518,6 +653,29 @@ export default function () {
     e.preventDefault();
     setCreateError('');
     setCreating(true);
+
+    const targetNs = namespace === 'all' ? (namespaces[0] || 'default') : namespace;
+    const cronValue = cronExpression.trim();
+    const derivedScriptName = newRun.scriptName || newRun.name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+    const derivedScriptFile = newRun.scriptFile || 'script.js';
+
+    const defaultOutputArgs = runDefaults.use_output ? runDefaults.output_args.trim() : '';
+    const overrideOutputArgs = newRun.useArguments ? newRun.argumentsText.trim() : '';
+    const outputArgs = newRun.useArguments ? overrideOutputArgs : defaultOutputArgs;
+    const existingEnvVars = Array.isArray(editingCrd?.spec?.runner?.env)
+      ? (editingCrd?.spec?.runner?.env as Array<{ key?: string; name?: string; value?: string }>)
+          .map((entry) => ({
+            name: (entry.name || entry.key || '').trim(),
+            value: entry.value ?? '',
+          }))
+          .filter((entry) => entry.name !== '')
+      : [];
+    const defaultEnvVars = (existingEnvVars.length > 0 ? existingEnvVars : (runDefaults.env_vars || []))
+      .map(({ key, value, name }) => ({
+        name: (name || key || '').trim(),
+        value: value ?? '',
+      }))
+      .filter(entry => entry.name !== '');
 
     const specBody: any = {
       name: newRun.name,
@@ -541,23 +699,80 @@ export default function () {
       }
     };
 
-    if (newRun.useArguments) {
-      specBody.spec.arguments = newRun.argumentsText.trim();
+    if (outputArgs) {
+      specBody.spec.arguments = outputArgs;
     }
 
     if (newRun.useCustomImage) {
       specBody.spec.runner.image = newRun.customImage;
     }
+    if (defaultEnvVars.length > 0) {
+      specBody.spec.runner.env = defaultEnvVars;
+    }
 
-    const targetNs = namespace === 'all' ? (namespaces[0] || 'default') : namespace;
     try {
+      if (scheduleEnabled) {
+        if (!cronValue) {
+          setCreateError(t('cronRequired'));
+          return;
+        }
+        const cronFields = cronValue.split(/\s+/);
+        if (cronFields.length !== 5) {
+          setCreateError(t('cronInvalid'));
+          return;
+        }
+        if (cronFields[0] !== '0') {
+          setCreateError(t('cronRoundHourError'));
+          return;
+        }
+
+        let templateId = selectedTemplateId;
+        if (!templateId) {
+          if (scriptSource !== 'manual') {
+            setCreateError(t('scheduleRequiresScript'));
+            return;
+          }
+
+          const createdTemplate = await api.createTemplate({
+            name: newRun.name,
+            parallelism: Number(newRun.parallelism),
+            script_name: derivedScriptName,
+            script_file: derivedScriptFile,
+            runner_image: newRun.useCustomImage ? newRun.customImage : '',
+            cpu_limit: newRun.cpuLimit,
+            mem_limit: newRun.memLimit,
+            script_content: newRun.scriptContent,
+          });
+          templateId = createdTemplate.id;
+        }
+
+        await api.createSchedule({
+          name: newRun.name,
+          cluster_id: selectedClusterId,
+          namespace: targetNs,
+          template_id: templateId,
+          cron_expression: cronValue,
+          active: true,
+          enforce_round_hour: true,
+        });
+        showToast(t('scheduleCreated'), 'success');
+        setIsModalOpen(false);
+        setNewRun(buildDefaultRunConfig());
+        setSelectedTemplateId('');
+        setScheduleEnabled(false);
+        setCronExpression('');
+        return;
+      }
+
+      specBody.resource_kind = 'testrun';
       await api.createCRD(selectedClusterId, targetNs, specBody);
       setIsModalOpen(false);
       // Reset
-      setNewRun(DEFAULT_RUN_CONFIG);
+      setNewRun(buildDefaultRunConfig());
+      setEditingCrd(null);
       fetchCRDs();
     } catch (err: any) {
-      setCreateError(err.message || 'Error deploying CRD');
+      setCreateError(err.message || t('deployCrdFailed'));
     } finally {
       setCreating(false);
     }
@@ -578,10 +793,10 @@ export default function () {
       setIsCmModalOpen(false);
       setNewCm({ name: '', fileName: 'script.js', scriptContent: '' });
       fetchConfigMaps();
-      showToast('ConfigMap created successfully!', 'success');
+      showToast(t('configMapCreated'), 'success');
     } catch (err: any) {
       console.error(err);
-      setCreateCmError(err.message || 'Error creating ConfigMap');
+      setCreateCmError(err.message || t('configMapCreateFailed'));
     } finally {
       setCreatingCm(false);
     }
@@ -619,17 +834,17 @@ export default function () {
               onChange={(e) => handleNamespaceChange(e.target.value)}
               className="bg-slate-900 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-300 outline-none focus:border-purple-500 font-semibold"
             >
-              <option value="all">All Namespaces</option>
+              <option value="all">{t('allNamespaces')}</option>
               {namespaces.map((ns) => (
                 <option key={ns} value={ns}>{ns}</option>
               ))}
-              <option value="__custom__">+ Custom Namespace...</option>
+              <option value="__custom__">{t('addCustomNamespace')}</option>
             </select>
           </div>
 
           {!isViewer && (
             <button
-              onClick={() => setIsModalOpen(true)}
+              onClick={handleStartNewRun}
               disabled={!selectedClusterId}
               className="flex items-center space-x-2 px-5 py-2.5 bg-gradient-to-r from-purple-600 to-pink-500 hover:from-purple-500 hover:to-pink-400 text-white rounded-xl font-semibold shadow-lg shadow-purple-500/10 hover:shadow-purple-500/25 transition duration-300 text-xs cursor-pointer disabled:opacity-50"
             >
@@ -659,13 +874,13 @@ export default function () {
           </div>
 
           {loading && crds.length === 0 ? (
-            <div className="py-24 text-center text-slate-500">Loading...</div>
+            <div className="py-24 text-center text-slate-500">{t('loading')}</div>
           ) : error ? (
             <div className="py-12 px-6 text-center text-red-400 bg-red-500/5 border border-red-500/10 rounded-2xl space-y-3">
               <Compass className="w-8 h-8 mx-auto text-red-500 animate-pulse" />
               <p className="text-sm font-semibold">{error}</p>
               <p className="text-[11px] text-slate-500 max-w-md mx-auto">
-                Please verify K8s cluster connection in settings, check if your Service Account token has permissions to read namespaces/k6s, and ensure the k6 operator CRD is installed.
+                {t('inspectClusters')}
               </p>
             </div>
           ) : crds.length === 0 ? (
@@ -706,7 +921,7 @@ export default function () {
                           )}
                           <span className="flex items-center space-x-1">
                             <Calendar className="w-3 h-3" />
-                            <span>{new Date(crd.metadata.creationTimestamp).toLocaleString()}</span>
+                            <span>{new Date(crd.metadata.creationTimestamp).toLocaleString(lang)}</span>
                           </span>
                           <span>•</span>
                           <span>{t('runners')}: {crd.spec.parallelism}</span>
@@ -747,7 +962,7 @@ export default function () {
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-bold text-slate-300 flex items-center gap-2 uppercase tracking-wider">
                 <FileCode2 className="w-4 h-4 text-purple-400" />
-                <span>ConfigMaps (k6s=enabled)</span>
+                <span>{t('scriptConfigMap')} (k6s=enabled)</span>
               </h3>
               <div className="flex items-center space-x-2">
                 {!isViewer && (
@@ -762,7 +977,7 @@ export default function () {
                       setIsCmModalOpen(true);
                     }}
                     className="p-1.5 border border-slate-850 hover:bg-slate-800 text-slate-400 hover:text-slate-100 rounded-lg transition cursor-pointer"
-                    title={t('newConfigMap') || 'New ConfigMap'}
+                    title={t('newConfigMap')}
                   >
                     <Plus className="w-3.5 h-3.5" />
                   </button>
@@ -770,7 +985,7 @@ export default function () {
                 <button
                   onClick={fetchConfigMaps}
                   className="p-1.5 border border-slate-850 hover:bg-slate-800 text-slate-400 hover:text-slate-100 rounded-lg transition cursor-pointer"
-                  title="Refresh ConfigMaps"
+                  title={t('refreshConfigMaps')}
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${loadingConfigMaps ? 'animate-spin' : ''}`} />
                 </button>
@@ -778,10 +993,10 @@ export default function () {
             </div>
 
             {loadingConfigMaps && configMaps.length === 0 ? (
-              <div className="py-6 text-center text-slate-500 text-xs">Loading ConfigMaps...</div>
+              <div className="py-6 text-center text-slate-500 text-xs">{t('loading')}</div>
             ) : configMaps.length === 0 ? (
               <div className="py-6 text-center text-slate-600 text-xs">
-                No ConfigMaps found with label k6s=enabled in this namespace.
+                {t('noResources')}
               </div>
             ) : (
               <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
@@ -819,7 +1034,7 @@ export default function () {
                                 {cm.namespace}
                               </span>
                             )}
-                            <span>Files: {fileNames.join(', ') || 'none'}</span>
+                            <span>{t('jsFile')}: {fileNames.join(', ') || t('none')}</span>
                           </p>
                         </div>
                       </div>
@@ -835,7 +1050,7 @@ export default function () {
                               handleDeleteConfigMap(cm.name, cm.namespace);
                             }}
                             className="p-2 border border-transparent hover:border-red-500/20 hover:bg-red-500/10 text-slate-500 hover:text-red-400 rounded-lg transition duration-200 cursor-pointer opacity-0 group-hover:opacity-100"
-                            title="Delete ConfigMap"
+                            title={t('deleteConfigMap')}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -859,7 +1074,7 @@ export default function () {
                     {t('details')}
                   </span>
                   <h3 className="text-xl font-bold text-slate-200 mt-2">{selectedCrd.metadata.name}</h3>
-                  <p className="text-xs text-slate-500 mt-1">Namespace: <strong className="font-semibold text-slate-400">{selectedCrd.metadata.namespace}</strong></p>
+                  <p className="text-xs text-slate-500 mt-1">{t('namespaceLabel')}: <strong className="font-semibold text-slate-400">{selectedCrd.metadata.namespace}</strong></p>
                 </div>
                 <div className="flex space-x-2 shrink-0">
                   <button
@@ -875,18 +1090,28 @@ export default function () {
                     className="flex items-center space-x-1 px-3 py-1.5 bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 hover:text-purple-300 border border-purple-500/20 rounded-xl transition duration-300 text-xs font-semibold cursor-pointer"
                   >
                     <Terminal className="w-3.5 h-3.5" />
-                    <span>View Logs</span>
+                    <span>{t('viewLogs')}</span>
                   </button>
                   {!isViewer && (
                     <>
+                      {(selectedCrd.kind === 'CronJob' || selectedCrd.kind === 'Job') && (
+                        <button
+                          onClick={() => handleStartEditRun(selectedCrd)}
+                          className="flex items-center space-x-1 px-3 py-1.5 bg-slate-700/40 hover:bg-slate-700/60 text-slate-200 border border-slate-700/60 rounded-xl transition duration-300 text-xs font-semibold cursor-pointer"
+                          title={t('edit')}
+                        >
+                          <Edit className="w-3.5 h-3.5" />
+                          <span>{t('edit')}</span>
+                        </button>
+                      )}
                       <button
                         onClick={() => handleRelaunchCRD(selectedCrd)}
                         disabled={relaunching}
                         className="flex items-center space-x-1 px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 hover:text-emerald-300 border border-emerald-500/20 rounded-xl transition duration-300 text-xs font-semibold cursor-pointer disabled:opacity-50"
-                        title="Delete and re-run with same spec"
+                        title={t('deleteRerunSameSpec')}
                       >
                         <RefreshCw className={`w-3.5 h-3.5 ${relaunching ? 'animate-spin' : ''}`} />
-                        <span>{relaunching ? 'Relaunching...' : 'Relaunch'}</span>
+                        <span>{relaunching ? t('relaunching') : t('relaunch')}</span>
                       </button>
                       <button
                         onClick={() => handleDeleteCRD(selectedCrd.metadata.name, selectedCrd.metadata.namespace)}
@@ -908,7 +1133,7 @@ export default function () {
                     <span>{t('scriptConfigMap')}</span>
                   </div>
                   <p className="text-xs font-semibold text-slate-300 mt-1 truncate">
-                    {selectedCrd.spec.script?.configMap?.name || 'N/A'}
+                    {selectedCrd.spec.script?.configMap?.name || t('notAvailable')}
                   </p>
                 </div>
                 
@@ -918,7 +1143,17 @@ export default function () {
                     <span>{t('jsFile')}</span>
                   </div>
                   <p className="text-xs font-semibold text-slate-300 mt-1 truncate">
-                    {selectedCrd.spec.script?.configMap?.file || 'N/A'}
+                    {selectedCrd.spec.script?.configMap?.file || t('notAvailable')}
+                  </p>
+                </div>
+
+                <div className="p-3 bg-slate-950/40 rounded-xl border border-slate-900">
+                  <div className="flex items-center space-x-2 text-slate-500 text-[10px] font-bold uppercase tracking-wider">
+                    <Layers className="w-3.5 h-3.5" />
+                    <span>{t('runnerImage')}</span>
+                  </div>
+                  <p className="text-xs font-semibold text-slate-300 mt-1 truncate">
+                    {selectedCrd.spec.runner?.image || 'default'}
                   </p>
                 </div>
               </div>
@@ -928,12 +1163,12 @@ export default function () {
                 <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{t('limits')}</h4>
                 <div className="grid grid-cols-2 text-xs">
                   <div className="flex justify-between border-r border-slate-800 pr-4">
-                    <span className="text-slate-500">CPU</span>
-                    <span className="font-semibold text-slate-300">{selectedCrd.spec.runner?.resources?.limits?.cpu || 'Unlimited'}</span>
+                    <span className="text-slate-500">{t('cpuLimit')}</span>
+                    <span className="font-semibold text-slate-300">{selectedCrd.spec.runner?.resources?.limits?.cpu || t('unlimited')}</span>
                   </div>
                   <div className="flex justify-between pl-4">
-                    <span className="text-slate-500">Memory</span>
-                    <span className="font-semibold text-slate-300">{selectedCrd.spec.runner?.resources?.limits?.memory || 'Unlimited'}</span>
+                    <span className="text-slate-500">{t('memLimit')}</span>
+                    <span className="font-semibold text-slate-300">{selectedCrd.spec.runner?.resources?.limits?.memory || t('unlimited')}</span>
                   </div>
                 </div>
               </div>
@@ -948,11 +1183,11 @@ export default function () {
 
               {/* ConfigMap Viewer */}
               {loadingConfigMap ? (
-                <div className="text-center text-slate-500 text-xs py-4">Loading script ConfigMap...</div>
+                <div className="text-center text-slate-500 text-xs py-4">{t('loading')}</div>
               ) : configMapData ? (
                 <div className="flex flex-col min-h-[150px]">
                   <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">
-                    Script ConfigMap: <span className="font-mono text-purple-400">{configMapData.name}</span>
+                    {t('scriptConfigMap')}: <span className="font-mono text-purple-400">{configMapData.name}</span>
                   </h4>
                   <div className="bg-slate-950 rounded-2xl border border-slate-850 overflow-hidden flex flex-col flex-1">
                     {Object.keys(configMapData.data || {}).map((fileName) => (
@@ -968,13 +1203,13 @@ export default function () {
                                     disabled={savingConfigMap}
                                     className="text-[9px] px-2 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded hover:bg-emerald-500/20 transition cursor-pointer font-semibold"
                                   >
-                                    {savingConfigMap ? 'Saving...' : 'Save'}
+                                    {savingConfigMap ? t('saving') : t('save')}
                                   </button>
                                   <button
                                     onClick={() => setEditingConfigMapFile(null)}
                                     className="text-[9px] px-2 py-0.5 bg-slate-800 text-slate-400 border border-slate-700 rounded hover:bg-slate-700 transition cursor-pointer font-semibold"
                                   >
-                                    Cancel
+                                    {t('cancel')}
                                   </button>
                                 </>
                               ) : (
@@ -985,7 +1220,7 @@ export default function () {
                                   }}
                                   className="text-[9px] px-2 py-0.5 bg-purple-500/10 text-purple-400 border border-purple-500/20 rounded hover:bg-purple-500/20 transition cursor-pointer font-semibold"
                                 >
-                                  Edit
+                                  {t('edit')}
                                 </button>
                               )}
                             </div>
@@ -1014,17 +1249,17 @@ export default function () {
               <div className="border-b border-slate-800/80 pb-4 mb-4 flex justify-between items-start">
                 <div>
                   <span className="text-[10px] bg-purple-500/10 text-purple-400 px-2 py-0.5 rounded-md border border-purple-500/20 font-semibold uppercase">
-                    ConfigMap Details
+                    {t('crdDetails')}
                   </span>
                   <h3 className="text-xl font-bold text-slate-200 mt-2">{selectedConfigMap.name}</h3>
-                  <p className="text-xs text-slate-500 mt-1">Namespace: <strong className="font-semibold text-slate-400">{selectedConfigMap.namespace || namespace}</strong></p>
+                  <p className="text-xs text-slate-500 mt-1">{t('namespaceLabel')}: <strong className="font-semibold text-slate-400">{selectedConfigMap.namespace || namespace}</strong></p>
                 </div>
               </div>
 
               {configMapData ? (
                 <div className="flex flex-col flex-1 min-h-[300px]">
                   <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">
-                    Files inside ConfigMap:
+                    {t('jsFile')}:
                   </h4>
                   <div className="bg-slate-950 rounded-2xl border border-slate-850 overflow-hidden flex flex-col flex-1">
                     {Object.keys(configMapData.data || {}).map((fileName) => (
@@ -1040,13 +1275,13 @@ export default function () {
                                     disabled={savingConfigMap}
                                     className="text-[9px] px-2 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded hover:bg-emerald-500/20 transition cursor-pointer font-semibold"
                                   >
-                                    {savingConfigMap ? 'Saving...' : 'Save'}
+                                    {savingConfigMap ? t('saving') : t('save')}
                                   </button>
                                   <button
                                     onClick={() => setEditingConfigMapFile(null)}
                                     className="text-[9px] px-2 py-0.5 bg-slate-800 text-slate-400 border border-slate-700 rounded hover:bg-slate-700 transition cursor-pointer font-semibold"
                                   >
-                                    Cancel
+                                    {t('cancel')}
                                   </button>
                                 </>
                               ) : (
@@ -1057,7 +1292,7 @@ export default function () {
                                   }}
                                   className="text-[9px] px-2 py-0.5 bg-purple-500/10 text-purple-400 border border-purple-500/20 rounded hover:bg-purple-500/20 transition cursor-pointer font-semibold"
                                 >
-                                  Edit
+                                  {t('edit')}
                                 </button>
                               )}
                             </div>
@@ -1079,7 +1314,7 @@ export default function () {
                   </div>
                 </div>
               ) : (
-                <div className="text-center text-slate-500 text-xs py-4">No data found in ConfigMap</div>
+                <div className="text-center text-slate-500 text-xs py-4">{t('noConfigMapData')}</div>
               )}
             </div>
           ) : (
@@ -1094,32 +1329,39 @@ export default function () {
       {/* New CRD Run Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-lg p-8 shadow-2xl relative">
-            <button
-              onClick={() => setIsModalOpen(false)}
-              className="absolute top-6 right-6 text-slate-500 hover:text-slate-300 p-1 cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-lg shadow-2xl relative flex flex-col max-h-[90vh]">
+            {/* Sticky header */}
+            <div className="px-8 pt-8 pb-4 flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsModalOpen(false)}
+                className="absolute top-6 right-6 text-slate-500 hover:text-slate-300 p-1 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
 
-            <h3 className="text-2xl font-bold text-slate-100 mb-2">{t('instantiateK6')}</h3>
-            <p className="text-slate-400 text-xs mb-6">
-              {t('launchSpecDesc')}
-            </p>
+              <h3 className="text-2xl font-bold text-slate-100 mb-2">{t('instantiateK6')}</h3>
+              <p className="text-slate-400 text-xs mb-0">
+                {t('launchSpecDesc')}
+              </p>
 
-            {createError && (
-              <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-xs">
-                {createError}
-              </div>
-            )}
+              {createError && (
+                <div className="mt-4 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-xs">
+                  {createError}
+                </div>
+              )}
+            </div>
 
-            <form onSubmit={handleCreateCRD} className="space-y-4">
+            {/* Scrollable form body */}
+            <form onSubmit={handleCreateCRD} className="flex flex-col flex-1 min-h-0">
+              <div className="overflow-y-auto flex-1 px-8 py-4 space-y-4">
               {templates.length > 0 && (
                 <div className="animate-fadeIn">
-                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Apply K6 Template</label>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('k6Template')}</label>
                   <select
                     onChange={(e) => {
                       const val = e.target.value;
+                      setSelectedTemplateId(val);
                       if (!val) return;
                       const tmpl = templates.find(t => t.id === val);
                       if (tmpl) {
@@ -1137,7 +1379,7 @@ export default function () {
                     }}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-300 outline-none focus:border-purple-500 font-semibold"
                   >
-                    <option value="">-- Choose template to load --</option>
+                    <option value="">-- {t('k6Template')} --</option>
                     {templates.map(t => (
                       <option key={t.id} value={t.id}>{t.name}</option>
                     ))}
@@ -1189,6 +1431,34 @@ export default function () {
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-purple-500"
                   />
                 </div>
+              </div>
+
+              <div className="bg-slate-950/40 p-4 rounded-2xl border border-slate-800/80 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-slate-300">{t('scheduleTest')}</label>
+                  <input
+                    type="checkbox"
+                    checked={scheduleEnabled}
+                    onChange={(e) => setScheduleEnabled(e.target.checked)}
+                    className="accent-purple-500"
+                  />
+                </div>
+                {scheduleEnabled && (
+                  <div className="space-y-2">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('cronExpression')}</label>
+                      <input
+                        type="text"
+                        value={cronExpression}
+                        onChange={(e) => setCronExpression(e.target.value)}
+                        placeholder="0 11 * * *"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 outline-none focus:border-purple-500"
+                      />
+                      <p className="text-[10px] text-slate-500 mt-1">{t('cronExample')}</p>
+                    </div>
+                    <p className="text-[10px] text-slate-500">{t('scheduleManagedHint')}</p>
+                  </div>
+                )}
               </div>
 
               {/* Script Source Selector */}
@@ -1254,7 +1524,7 @@ export default function () {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-400 mb-1.5">JS Script Content</label>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('jsScriptContent')}</label>
                     <textarea
                       required
                       value={newRun.scriptContent}
@@ -1284,7 +1554,7 @@ export default function () {
                       required
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-300 outline-none focus:border-purple-500 font-semibold"
                     >
-                      <option value="">-- Choose existing ConfigMap --</option>
+                      <option value="">-- {t('selectConfigMap')} --</option>
                       {configMaps.map(cm => (
                         <option key={cm.name} value={cm.name}>{cm.name}</option>
                       ))}
@@ -1306,7 +1576,7 @@ export default function () {
                             <option key={f} value={f}>{f}</option>
                           ))
                         ) : (
-                          <option value="">No files</option>
+                          <option value="">{t('noFiles')}</option>
                         );
                       })()}
                     </select>
@@ -1323,7 +1593,7 @@ export default function () {
                     onChange={(e) => setNewRun({ ...newRun, useArguments: e.target.checked })}
                     className="accent-purple-500 rounded border-slate-800"
                   />
-                  <span className="text-xs font-semibold text-slate-300">Add output arguments</span>
+                  <span className="text-xs font-semibold text-slate-300">{t('addOutputArguments')}</span>
                 </label>
 
                 {newRun.useArguments && (
@@ -1346,51 +1616,62 @@ export default function () {
                   <input
                     type="checkbox"
                     checked={newRun.useCustomImage}
-                    onChange={(e) => setNewRun({ ...newRun, useCustomImage: e.target.checked })}
+                    onChange={(e) => {
+                      const enabled = e.target.checked;
+                      setNewRun(prev => ({
+                        ...prev,
+                        useCustomImage: enabled,
+                        customImage: enabled && needsResolvedRunnerImage(prev.customImage)
+                          ? runnerImagePlaceholder
+                          : prev.customImage,
+                      }));
+                    }}
                     className="accent-purple-500 rounded border-slate-800"
                   />
-                  <span className="text-xs font-semibold text-slate-300">Use custom image</span>
+                  <span className="text-xs font-semibold text-slate-300">{t('useCustomImage')}</span>
                 </label>
 
                 {newRun.useCustomImage && (
                   <div className="space-y-3 animate-fadeIn">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">AWS Account ID</label>
-                        <input
-                          type="text"
-                          required
-                          value={newRun.awsAccountId}
-                          onChange={(e) => handleAwsAccountOrRegionChange(e.target.value, newRun.awsRegion)}
-                          className="w-full bg-slate-950 border border-slate-850 rounded-xl px-3 py-2 text-xs text-slate-200 focus:border-purple-500 outline-none font-mono"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">EKS Region</label>
-                        <input
-                          type="text"
-                          required
-                          value={newRun.awsRegion}
-                          onChange={(e) => handleAwsAccountOrRegionChange(newRun.awsAccountId, e.target.value)}
-                          className="w-full bg-slate-950 border border-slate-850 rounded-xl px-3 py-2 text-xs text-slate-200 focus:border-purple-500 outline-none font-mono"
-                        />
-                      </div>
-                    </div>
                     <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Runner Image URL</label>
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">{t('runnerImagePath')}</label>
                       <input
                         type="text"
                         required
                         value={newRun.customImage}
                         onChange={(e) => setNewRun({ ...newRun, customImage: e.target.value })}
-                        className="w-full bg-slate-950 border border-slate-850 rounded-xl px-3 py-2.5 text-xs text-slate-200 focus:border-purple-500 outline-none font-mono text-[10px]"
+                        className="w-full bg-slate-950 border border-slate-850 rounded-xl px-3 py-2.5 text-xs text-slate-200 focus:border-purple-500 outline-none font-mono"
+                        placeholder={runnerImagePlaceholder}
                       />
                     </div>
+                    {checkingEcr && (
+                      <p className="text-[10px] text-slate-500">{t('checkingEcrRepo')}</p>
+                    )}
+                    {!checkingEcr && ecrCheck && (
+                      <div className={`text-[10px] ${ecrCheck.exists ? 'text-emerald-400' : 'text-amber-400'}`}>
+                        {ecrCheck.exists ? t('ecrRepoFound') : t('ecrRepoNotFound')}
+                        {ecrCheck.message && (
+                          <span className="text-slate-500 ml-2">{ecrCheck.message}</span>
+                        )}
+                      </div>
+                    )}
+                    {ecrHelper && (
+                      <div className="bg-slate-950/60 border border-slate-850 rounded-xl p-3 space-y-2 text-[10px] text-slate-300">
+                        <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{t('ecrPushHelper')}</p>
+                        <pre className="whitespace-pre-wrap font-mono text-[10px] text-slate-400">{ecrHelper.login}</pre>
+                        <pre className="whitespace-pre-wrap font-mono text-[10px] text-slate-400">{ecrHelper.ensureRepo}</pre>
+                        <pre className="whitespace-pre-wrap font-mono text-[10px] text-slate-400">{ecrHelper.tag}</pre>
+                        <pre className="whitespace-pre-wrap font-mono text-[10px] text-slate-400">{ecrHelper.push}</pre>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
 
-              <div className="flex space-x-3 pt-4">
+              </div>{/* end scrollable body */}
+
+              {/* Sticky footer */}
+              <div className="flex space-x-3 px-8 py-5 border-t border-slate-800 flex-shrink-0">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
@@ -1424,7 +1705,7 @@ export default function () {
 
             <h3 className="text-2xl font-bold text-slate-100 mb-2">{t('newConfigMap')}</h3>
             <p className="text-slate-400 text-xs mb-6">
-              Create a new script ConfigMap in the namespace <span className="text-purple-400 font-semibold">{namespace === 'all' ? (namespaces[0] || 'default') : namespace}</span> with the label <span className="font-mono text-purple-400">k6s=enabled</span>.
+              {t('newConfigMap')} — {t('namespaceLabel')}: <span className="text-purple-400 font-semibold">{namespace === 'all' ? (namespaces[0] || 'default') : namespace}</span> (k6s=enabled)
             </p>
 
             {createCmError && (
@@ -1454,7 +1735,7 @@ export default function () {
                     }}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-300 outline-none focus:border-purple-500 font-semibold"
                   >
-                    <option value="">-- Choose existing ConfigMap --</option>
+                    <option value="">-- {t('duplicateFrom')} --</option>
                     {configMaps.map(cm => (
                       <option key={cm.name} value={cm.name}>{cm.name}</option>
                     ))}
@@ -1546,9 +1827,9 @@ export default function () {
                   <Terminal className="w-5 h-5 animate-pulse" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-slate-100">K8s Pod Log Streamer</h3>
+                  <h3 className="text-lg font-bold text-slate-100">{t('viewLogs')}</h3>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    CRD: <span className="font-semibold text-slate-200">{logCrdName}</span> | Namespace: <span className="font-semibold text-slate-200">{selectedCrd?.metadata.namespace || namespace}</span>
+                    CRD: <span className="font-semibold text-slate-200">{logCrdName}</span> | {t('namespaceLabel')}: <span className="font-semibold text-slate-200">{selectedCrd?.metadata.namespace || namespace}</span>
                   </p>
                 </div>
               </div>
@@ -1564,31 +1845,31 @@ export default function () {
             <div className="bg-slate-950/50 p-4 rounded-2xl border border-slate-850 space-y-3 mb-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex-1">
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Select Pod</label>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">{t('selectPod')}</label>
                   {loadingPods ? (
-                    <div className="text-slate-500 text-xs py-2 animate-pulse">Loading active pods...</div>
+                    <div className="text-slate-500 text-xs py-2 animate-pulse">{t('loading')}</div>
                   ) : podsList.length > 0 ? (
                     <select
                       value={logsPodName}
                       onChange={(e) => setLogsPodName(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:border-purple-500 outline-none font-mono cursor-pointer"
                     >
-                      <option value="">-- Choose a pod --</option>
+                      <option value="">-- {t('selectPod')} --</option>
                       {/* First show matching pods for this test */}
-                      <optgroup label="Matching Pods">
+                      <optgroup label={t('matchingPods')}>
                         {podsList.filter(p => p.name.startsWith(logCrdName)).map(p => (
                           <option key={p.name} value={p.name}>{p.name} ({p.status})</option>
                         ))}
                       </optgroup>
                       {/* Then show other pods in the namespace */}
-                      <optgroup label="Other Pods in Namespace">
+                      <optgroup label={t('otherPods')}>
                         {podsList.filter(p => !p.name.startsWith(logCrdName)).map(p => (
                           <option key={p.name} value={p.name}>{p.name} ({p.status})</option>
                         ))}
                       </optgroup>
                     </select>
                   ) : (
-                    <div className="text-slate-500 text-xs py-2">No pods found in namespace.</div>
+                    <div className="text-slate-500 text-xs py-2">{t('noResources')}</div>
                   )}
                   <div className="mt-2">
                     <input
@@ -1596,7 +1877,7 @@ export default function () {
                       value={logsPodName}
                       onChange={(e) => setLogsPodName(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-1.5 text-[11px] text-slate-400 focus:border-purple-500 outline-none font-mono"
-                      placeholder="Or enter custom pod name manually"
+                      placeholder={t('customPodPlaceholder')}
                     />
                   </div>
                 </div>
@@ -1610,7 +1891,7 @@ export default function () {
                     }`}
                   >
                     <span className={`w-1.5 h-1.5 rounded-full ${isLiveLogs ? 'bg-red-500 animate-ping' : 'bg-slate-500'}`} />
-                    <span>{isLiveLogs ? 'Live Follow' : 'Manual'}</span>
+                    <span>{isLiveLogs ? t('liveFollow') : t('manual')}</span>
                   </button>
                   <button
                     onClick={() => fetchLogs()}
@@ -1625,12 +1906,12 @@ export default function () {
               {/* Suggestions */}
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-[10px] text-slate-500 font-bold uppercase tracking-wider pt-1 border-t border-slate-900/60 mt-2">
-                  <span>Quick Suggestions:</span>
+                  <span>{t('recommendations')}:</span>
                   <button
                     onClick={() => loadPods(logCrdName, selectedCrd?.metadata.namespace || namespace)}
                     className="text-purple-400 hover:text-purple-300 font-semibold cursor-pointer normal-case"
                   >
-                    Refresh Pods List
+                    {t('refreshConfigMaps')}
                   </button>
                 </div>
                 <div className="flex flex-wrap gap-2 pt-1">
@@ -1642,7 +1923,7 @@ export default function () {
                         : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    Initializer Pod
+                    {`${logCrdName}-initializer`}
                   </button>
                   <button
                     onClick={() => setLogsPodName(`${logCrdName}-runner`)}
@@ -1652,7 +1933,7 @@ export default function () {
                         : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    Runner Pod (Generic)
+                    {`${logCrdName}-runner`}
                   </button>
                   <button
                     onClick={() => setLogsPodName(`${logCrdName}-1`)}
@@ -1662,7 +1943,7 @@ export default function () {
                         : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    Runner 1 Pod
+                    {`${logCrdName}-1`}
                   </button>
                 </div>
               </div>
@@ -1680,13 +1961,13 @@ export default function () {
               ref={logsContainerRef}
               className="flex-1 bg-black rounded-2xl border border-slate-850 p-4 font-mono text-xs text-emerald-400/90 overflow-y-auto leading-relaxed shadow-inner"
             >
-              <pre className="whitespace-pre-wrap">{podLogsText || 'Establishing stream connection... Waiting for logs...'}</pre>
+              <pre className="whitespace-pre-wrap">{podLogsText || t('logsConnecting')}</pre>
             </div>
             
             {/* Console Status Footer */}
             <div className="mt-3 flex items-center justify-between text-[10px] text-slate-500 font-medium">
-              <span>Status: {loadingLogs ? 'Polling logs...' : 'Idle'}</span>
-              <span>Lines: {podLogsText ? podLogsText.split('\n').length : 0}</span>
+              <span>{t('logsStatus')} {loadingLogs ? t('logsPolling') : t('logsIdle')}</span>
+              <span>{t('totalLabel')}: {podLogsText ? podLogsText.split('\n').length : 0}</span>
             </div>
 
           </div>
@@ -1704,13 +1985,13 @@ export default function () {
                 onClick={() => setConfirmDialog(null)}
                 className="flex-1 py-2 border border-slate-850 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold transition cursor-pointer"
               >
-                {t('cancel') || 'Cancel'}
+                {t('cancel')}
               </button>
               <button
                 onClick={confirmDialog.onConfirm}
                 className="flex-1 py-2 bg-gradient-to-r from-purple-600 to-pink-500 text-white rounded-xl text-xs font-semibold shadow-lg transition cursor-pointer hover:from-purple-500 hover:to-pink-400"
               >
-                {t('confirm') || 'Confirm'}
+                {t('confirm')}
               </button>
             </div>
           </div>

@@ -15,7 +15,7 @@ import { api, ClusterConfig } from '@/services/api';
 import { usePreferences } from '@/components/PreferencesContext';
 
 export default function DashboardPage() {
-  const { t } = usePreferences();
+  const { t, lang } = usePreferences();
   const [clusters, setClusters] = useState<ClusterConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -33,7 +33,7 @@ export default function DashboardPage() {
       const data = await api.getClusters();
       setClusters(data || []);
     } catch (err: any) {
-      setError(t('k8sLoadError') || 'Failed to load clusters.');
+      setError(t('k8sLoadError'));
     } finally {
       setLoading(false);
     }
@@ -71,7 +71,7 @@ export default function DashboardPage() {
       setInfluxStatus('online');
     } catch (err) {
       console.error('Failed to fetch test runs from InfluxDB', err);
-      setInfluxRunsCount('N/A');
+      setInfluxRunsCount(t('notAvailable'));
       setInfluxStatus('offline');
     }
   };
@@ -113,18 +113,18 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         {[
           { title: t('totalClusters'), value: clusters.length, sub: t('operational'), icon: Server, color: 'text-purple-400 bg-purple-500/10 border-purple-500/20' },
-          { title: t('k6SuccessRate'), value: '99.8%', sub: '24h', icon: CheckCircle2, color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
+          { title: t('k6SuccessRate'), value: '99.8%', sub: t('period24h'), icon: CheckCircle2, color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
           { 
             title: t('activeTests'), 
             value: loadingActiveTests ? '...' : activeTests.active_count.toString(), 
-            sub: loadingActiveTests ? 'Checking...' : (activeTests.active_count > 0 ? activeTests.first_active : 'None running'), 
+            sub: loadingActiveTests ? t('checking') : (activeTests.active_count > 0 ? activeTests.first_active : t('noneRunning')), 
             icon: Activity, 
             color: 'text-pink-400 bg-pink-500/10 border-pink-500/20' 
           },
           { 
             title: t('influxTelemetries'), 
-            value: influxStatus === 'offline' ? 'Error' : influxRunsCount, 
-            sub: influxStatus === 'offline' ? 'Connection failed' : t('recentRuns'), 
+            value: influxStatus === 'offline' ? t('errorLabel') : influxRunsCount, 
+            sub: influxStatus === 'offline' ? t('connectionFailed') : t('recentRuns'), 
             icon: Database, 
             color: influxStatus === 'offline' 
               ? 'text-red-400 bg-red-500/10 border-red-500/20' 
@@ -159,15 +159,15 @@ export default function DashboardPage() {
         <div className="lg:col-span-2 bg-slate-900/30 border border-slate-800/80 rounded-2xl p-6 backdrop-blur-md">
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-lg font-bold text-white">{t('registeredK8sClusters')}</h3>
-            <span className="text-xs text-slate-500 font-medium">{clusters.length} total</span>
+            <span className="text-xs text-slate-500 font-medium">{clusters.length} {t('totalLabel')}</span>
           </div>
 
           {loading ? (
-            <div className="py-12 text-center text-slate-500 text-sm">Loading...</div>
+            <div className="py-12 text-center text-slate-500 text-sm">{t('loading')}</div>
           ) : error ? (
             <div className="py-12 text-center text-red-400 text-sm">{error}</div>
           ) : clusters.length === 0 ? (
-            <div className="py-12 text-center text-slate-500 text-sm">No clusters.</div>
+            <div className="py-12 text-center text-slate-500 text-sm">{t('noClusters')}</div>
           ) : (
             <div className="space-y-4">
               {clusters.map((cluster) => (
@@ -190,7 +190,7 @@ export default function DashboardPage() {
                           <span className="text-emerald-400">{t('connected')}</span>
                         </span>
                         <span>•</span>
-                        <span>Auth: <strong className="uppercase">{cluster.auth_type}</strong></span>
+                        <span>{t('authLabel')}: <strong className="uppercase">{cluster.auth_type}</strong></span>
                       </div>
                     </div>
                   </div>
@@ -214,10 +214,10 @@ export default function DashboardPage() {
                   operatorStatus.status === 'degraded' ? 'bg-amber-500 animate-pulse' : 'bg-red-500'
                 }`} />
                 <div>
-                  <span className="text-sm font-semibold text-slate-200 block">K6 Operator</span>
+                  <span className="text-sm font-semibold text-slate-200 block">{t('k6OperatorLabel')}</span>
                   {operatorStatus && (
                     <span className="text-[10px] text-slate-500 block font-mono">
-                      Active: {operatorStatus.deployed_count}/{operatorStatus.total_count}
+                      {t('activeCountLabel')} {operatorStatus.deployed_count}/{operatorStatus.total_count}
                     </span>
                   )}
                 </div>
@@ -229,10 +229,10 @@ export default function DashboardPage() {
                 operatorStatus.status === 'degraded' ? 'text-amber-400 bg-amber-400/10 border-amber-400/25' : 
                 'text-red-400 bg-red-400/10 border-red-400/25'
               }`}>
-                {loadingOperator ? 'Checking...' :
-                 !operatorStatus ? 'Unknown' :
-                 operatorStatus.status === 'ready' ? 'Ready' :
-                 operatorStatus.status === 'degraded' ? 'Degraded' : 'Offline'}
+                {loadingOperator ? t('checking') :
+                 !operatorStatus ? t('operatorUnknown') :
+                 operatorStatus.status === 'ready' ? t('operatorReady') :
+                 operatorStatus.status === 'degraded' ? t('operatorDegraded') : t('operatorOffline')}
               </span>
             </div>
 
@@ -242,14 +242,14 @@ export default function DashboardPage() {
                   influxStatus === 'online' ? 'bg-emerald-500' :
                   influxStatus === 'checking' ? 'bg-slate-600 animate-pulse' : 'bg-red-500'
                 }`} />
-                <span className="text-sm font-semibold text-slate-200">InfluxDB Service</span>
+                <span className="text-sm font-semibold text-slate-200">{t('influxdbService')}</span>
               </div>
               <span className={`text-xs px-2 py-0.5 rounded-md border ${
                 influxStatus === 'online' ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/25' :
                 influxStatus === 'checking' ? 'text-slate-500 bg-slate-500/10 border-slate-500/25' :
                 'text-red-400 bg-red-400/10 border-red-400/25'
               }`}>
-                {influxStatus === 'online' ? 'Online' : influxStatus === 'checking' ? 'Checking...' : 'Offline'}
+                {influxStatus === 'online' ? t('online') : influxStatus === 'checking' ? t('checking') : t('offline')}
               </span>
             </div>
           </div>

@@ -2,32 +2,28 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Lock, User, ShieldAlert, KeyRound, ArrowRight, Sun, Moon, Monitor } from 'lucide-react';
+import { Lock, User, ShieldAlert, KeyRound, ArrowRight, Sun, Moon, Monitor, Globe } from 'lucide-react';
 import { api } from '@/services/api';
-import { usePreferences, Theme } from '@/components/PreferencesContext';
+import { usePreferences, Theme, Language } from '@/components/PreferencesContext';
 
 export default function LoginPage() {
   const router = useRouter();
-  const { theme, setTheme, t } = usePreferences();
+  const { theme, setTheme, t, lang, setLang } = usePreferences();
   const [activeTab, setActiveTab] = useState<'local' | 'sso'>('local');
   
-  // Local Form state
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // SSO status and redirection state
   const [ssoEnabled, setSsoEnabled] = useState(false);
   const [ssoName, setSsoName] = useState('SSO');
   const [exchangeLoading, setExchangeLoading] = useState(false);
 
-  // Legacy/Mock SSO form state
   const [ssoUser, setSsoUser] = useState('sso-admin');
   const [ssoEmail, setSsoEmail] = useState('sso-admin@company.com');
 
   useEffect(() => {
-    // Check if real OIDC SSO is enabled on backend
     api.getSSOStatus().then(res => {
       setSsoEnabled(res.enabled);
       if (res.name) {
@@ -38,7 +34,6 @@ export default function LoginPage() {
       }
     }).catch(err => console.error(err));
 
-    // Handle OIDC callback code in URL parameters
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const code = params.get('code');
@@ -50,14 +45,14 @@ export default function LoginPage() {
             router.push('/');
           })
           .catch(err => {
-            setError(err.message || 'SSO OIDC exchange failed');
+            setError(err.message || t('ssoExchangeFailed'));
           })
           .finally(() => {
             setExchangeLoading(false);
           });
       }
     }
-  }, []);
+  }, [router, t]);
 
   const handleLocalSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -67,8 +62,9 @@ export default function LoginPage() {
     try {
       await api.login(username, password);
       router.push('/');
-    } catch (err: any) {
-      setError(err.message || 'Invalid credentials');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : '';
+      setError(message || t('invalidCredentials'));
     } finally {
       setLoading(false);
     }
@@ -82,10 +78,11 @@ export default function LoginPage() {
       if (res && res.url) {
         window.location.href = res.url;
       } else {
-        throw new Error('Could not retrieve OIDC authorization endpoint');
+        throw new Error(t('oidcAuthEndpointError'));
       }
-    } catch (err: any) {
-      setError(err.message || 'OIDC redirect failed');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : '';
+      setError(message || t('oidcRedirectFailed'));
       setLoading(false);
     }
   };
@@ -98,16 +95,22 @@ export default function LoginPage() {
     try {
       await api.loginSSO(ssoUser, ssoEmail);
       router.push('/');
-    } catch (err: any) {
-      setError('SSO connection failed');
+    } catch {
+      setError(t('ssoConnectionFailed'));
     } finally {
       setLoading(false);
     }
   };
 
+  const themeOptions = [
+    { name: 'light' as Theme, icon: Sun, label: t('light') },
+    { name: 'dark' as Theme, icon: Moon, label: t('dark') },
+    { name: 'system' as Theme, icon: Monitor, label: t('system') },
+  ];
+
   if (exchangeLoading) {
     return (
-      <main className="min-h-screen bg-slate-950 flex items-center justify-center p-4 relative overflow-hidden">
+      <main className="min-h-screen bg-slate-950 flex items-center justify-center p-4 relative overflow-hidden" dir={lang === 'he' ? 'rtl' : 'ltr'}>
         <div className="absolute top-1/4 left-1/4 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-purple-600/20 rounded-full blur-[120px] pointer-events-none" />
         <div className="absolute bottom-1/4 right-1/4 translate-x-1/2 translate-y-1/2 w-96 h-96 bg-pink-500/15 rounded-full blur-[120px] pointer-events-none" />
         
@@ -115,47 +118,62 @@ export default function LoginPage() {
           <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-purple-600 to-pink-500 flex items-center justify-center font-bold text-white shadow-xl shadow-purple-500/20 text-xl mx-auto animate-pulse">
             K6
           </div>
-          <h2 className="text-xl font-bold text-white">OIDC Authentication</h2>
-          <p className="text-slate-400 text-xs animate-pulse">Exchanging authorization code for dashboard session...</p>
+          <h2 className="text-xl font-bold text-white">{t('oidcAuth')}</h2>
+          <p className="text-slate-400 text-xs animate-pulse">{t('oidcExchanging')}</p>
         </div>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 flex items-center justify-center p-4 relative overflow-hidden">
-      {/* Floating Theme Selector */}
-      <div className="absolute top-6 right-6 z-20 flex bg-slate-900/40 backdrop-blur-md p-1 rounded-2xl border border-slate-800/80 shadow-lg">
-        {[
-          { name: 'light', icon: Sun, label: 'Light' },
-          { name: 'dark', icon: Moon, label: 'Dark' },
-          { name: 'system', icon: Monitor, label: 'System' }
-        ].map(th => {
-          const Icon = th.icon;
-          const isSelected = theme === th.name;
-          return (
-            <button
-              key={th.name}
-              onClick={() => setTheme(th.name as Theme)}
-              title={th.label}
-              className={`p-2 rounded-xl transition-all duration-300 cursor-pointer ${
-                isSelected ? 'bg-slate-800 text-purple-400 border border-purple-500/20' : 'text-slate-500 hover:text-slate-300'
-              }`}
-            >
-              <Icon className="w-4 h-4" />
-            </button>
-          );
-        })}
+    <main className="min-h-screen bg-slate-950 flex items-center justify-center p-4 relative overflow-hidden" dir={lang === 'he' ? 'rtl' : 'ltr'}>
+      <div className="absolute top-6 right-6 z-20 flex items-center gap-2">
+        <div className="flex bg-slate-900/40 backdrop-blur-md p-1 rounded-2xl border border-slate-800/80 shadow-lg">
+          {themeOptions.map(th => {
+            const Icon = th.icon;
+            const isSelected = theme === th.name;
+            return (
+              <button
+                key={th.name}
+                onClick={() => setTheme(th.name)}
+                title={th.label}
+                className={`p-2 rounded-xl transition-all duration-300 cursor-pointer ${
+                  isSelected ? 'bg-slate-800 text-purple-400 border border-purple-500/20' : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex items-center gap-1 bg-slate-900/40 backdrop-blur-md px-2 py-1 rounded-2xl border border-slate-800/80 shadow-lg">
+          <Globe className="w-3.5 h-3.5 text-slate-500" />
+          <div className="flex bg-slate-900/60 p-0.5 rounded-xl border border-slate-800 gap-0.5">
+            {[
+              { code: 'en', label: 'EN' },
+              { code: 'fr', label: 'FR' },
+              { code: 'he', label: 'עב' },
+              { code: 'zh', label: '中' }
+            ].map((l) => (
+              <button
+                key={l.code}
+                onClick={() => setLang(l.code as Language)}
+                title={t('lang')}
+                className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition cursor-pointer ${
+                  lang === l.code ? 'bg-slate-800 text-white border border-purple-500/20' : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                {l.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
-      {/* Background gradients */}
       <div className="absolute top-1/4 left-1/4 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-purple-600/20 rounded-full blur-[120px] pointer-events-none" />
       <div className="absolute bottom-1/4 right-1/4 translate-x-1/2 translate-y-1/2 w-96 h-96 bg-pink-500/15 rounded-full blur-[120px] pointer-events-none" />
 
-      {/* Main card */}
       <div className="w-full max-w-md bg-slate-900/60 backdrop-blur-xl border border-slate-800 rounded-3xl p-8 shadow-2xl relative z-10 animate-fadeIn">
-        
-        {/* Brand Header */}
         <div className="flex flex-col items-center mb-8 text-center">
           <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-purple-600 to-pink-500 flex items-center justify-center font-bold text-white shadow-xl shadow-purple-500/20 text-xl mb-3">
             K6
@@ -168,7 +186,6 @@ export default function LoginPage() {
           </p>
         </div>
 
-        {/* Tab Buttons */}
         {ssoEnabled && (
           <div className="flex bg-slate-950 p-1.5 rounded-2xl mb-6 border border-slate-800/80">
             <button
@@ -191,12 +208,11 @@ export default function LoginPage() {
                   : 'text-slate-500 hover:text-slate-300'
               }`}
             >
-              {ssoName} Login
+              {t('ssoLoginTabLabel', { name: ssoName })}
             </button>
           </div>
         )}
 
-        {/* Error alert */}
         {error && (
           <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-2xl flex items-center space-x-3 text-red-400 text-xs animate-shake">
             <ShieldAlert className="w-4.5 h-4.5 shrink-0" />
@@ -204,7 +220,6 @@ export default function LoginPage() {
           </div>
         )}
 
-        {/* Local authentication form */}
         {(activeTab === 'local' || !ssoEnabled) && (
           <form onSubmit={handleLocalSubmit} className="space-y-4">
             <div>
@@ -214,7 +229,7 @@ export default function LoginPage() {
                 <input
                   type="text"
                   required
-                  placeholder="Username"
+                  placeholder={t('username')}
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   className="w-full bg-slate-950/80 border border-slate-800 hover:border-slate-700 focus:border-purple-500 focus:ring-1 focus:ring-purple-500/20 rounded-2xl py-3 pl-11 pr-4 text-sm text-slate-200 placeholder-slate-600 outline-none transition-all"
@@ -229,7 +244,7 @@ export default function LoginPage() {
                 <input
                   type="password"
                   required
-                  placeholder="••••••••"
+                  placeholder={t('passwordPlaceholder')}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="w-full bg-slate-950/80 border border-slate-800 hover:border-slate-700 focus:border-purple-500 focus:ring-1 focus:ring-purple-500/20 rounded-2xl py-3 pl-11 pr-4 text-sm text-slate-200 placeholder-slate-600 outline-none transition-all"
@@ -247,25 +262,22 @@ export default function LoginPage() {
 
             <div className="mt-4 p-3 bg-purple-500/5 border border-purple-500/10 rounded-xl flex items-start space-x-2.5 text-[11px] text-purple-400">
               <KeyRound className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-              <span>
-                <strong>Local database accounts:</strong> use local users registered under the settings console.
-              </span>
+              <span>{t('localAccountsHint')}</span>
             </div>
           </form>
         )}
 
-        {/* SSO authentication form */}
         {activeTab === 'sso' && ssoEnabled && (
           <div className="space-y-4 animate-fadeIn">
             {ssoEnabled ? (
               <div className="text-center py-4 space-y-4">
-                <p className="text-xs text-slate-400">{ssoName} is configured. Click below to redirect to OIDC provider login.</p>
+                <p className="text-xs text-slate-400">{t('ssoConfiguredHint', { name: ssoName })}</p>
                 <button
                   onClick={handleRealSSOLogin}
                   disabled={loading}
                   className="w-full bg-gradient-to-r from-purple-600 to-pink-500 hover:from-purple-500 hover:to-pink-400 text-white font-semibold py-3.5 px-4 rounded-2xl transition-all duration-300 shadow-lg active:scale-98 text-sm cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2"
                 >
-                  <span>Launch {ssoName} Login</span>
+                  <span>{t('launchSsoLogin', { name: ssoName })}</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </div>
@@ -273,7 +285,7 @@ export default function LoginPage() {
               <form onSubmit={handleSSOSubmit} className="space-y-4">
                 <div className="p-4 bg-slate-950 border border-slate-800/80 rounded-2xl space-y-3">
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 mb-1">SSO User Name</label>
+                    <label className="block text-[11px] font-semibold text-slate-500 mb-1">{t('ssoUserName')}</label>
                     <input
                       type="text"
                       required
@@ -283,7 +295,7 @@ export default function LoginPage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 mb-1">Email</label>
+                    <label className="block text-[11px] font-semibold text-slate-500 mb-1">{t('emailLabel')}</label>
                     <input
                       type="email"
                       required
@@ -310,4 +322,3 @@ export default function LoginPage() {
     </main>
   );
 }
-

@@ -17,7 +17,7 @@ import { api, TestRunSummary, TelemetryPoint, InfluxServerConfig } from '@/servi
 import { usePreferences } from '@/components/PreferencesContext';
 
 export default function MetricsPage() {
-  const { t } = usePreferences();
+  const { t, lang } = usePreferences();
   const [runs, setRuns] = useState<TestRunSummary[]>([]);
   const [selectedRunKeys, setSelectedRunKeys] = useState<string[]>([]);
   const [metric, setMetric] = useState<'vus' | 'http_req_duration' | 'error_rate'>('http_req_duration');
@@ -622,8 +622,8 @@ export default function MetricsPage() {
 
       {/* Print-only Report Header */}
       <div className="hidden print:block border-b-2 border-slate-300 pb-4 mb-6 no-print">
-        <h1 className="text-2xl font-bold text-slate-900">K6 Stratum Portal - Performance Test Report</h1>
-        <p className="text-xs text-slate-500 mt-1">Generated on: {new Date().toLocaleString()}</p>
+        <h1 className="text-2xl font-bold text-slate-900">{t('reportTitle')}</h1>
+        <p className="text-xs text-slate-500 mt-1">{t('reportGeneratedOn')} {new Date().toLocaleString(lang)}</p>
       </div>
 
       {/* Title */}
@@ -646,7 +646,7 @@ export default function MetricsPage() {
               }`}
             >
               <Activity className={`w-4 h-4 ${isLive ? 'animate-pulse' : ''}`} />
-              <span>{isLive ? 'LIVE' : 'Go Live'}</span>
+              <span>{isLive ? t('live') : t('goLive')}</span>
             </button>
           )}
 
@@ -655,7 +655,7 @@ export default function MetricsPage() {
             className="flex items-center space-x-2 px-3.5 py-2.5 border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white rounded-xl text-xs font-semibold transition cursor-pointer"
           >
             <Printer className="w-4 h-4" />
-            <span>Export PDF</span>
+            <span>{t('exportPdf')}</span>
           </button>
 
           <button
@@ -680,7 +680,7 @@ export default function MetricsPage() {
           {/* Cluster & Namespace Selectors */}
           <div className="grid grid-cols-2 gap-2 text-xs">
             <div className="space-y-1">
-              <label className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Cluster</label>
+              <label className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">{t('clusterLabel')}</label>
               <select
                 value={selectedCluster}
                 onChange={(e) => {
@@ -689,14 +689,14 @@ export default function MetricsPage() {
                 }}
                 className="w-full bg-slate-950/80 border border-slate-850 text-slate-300 hover:text-white px-2.5 py-2 rounded-xl outline-none focus:border-purple-500/50 transition cursor-pointer"
               >
-                <option value="">All Clusters</option>
+                <option value="">{t('allClusters')}</option>
                 {uniqueClusters.map(c => (
                   <option key={c} value={c}>{c}</option>
                 ))}
               </select>
             </div>
             <div className="space-y-1">
-              <label className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Namespace</label>
+              <label className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">{t('namespaceLabel')}</label>
               <select
                 value={selectedNamespace}
                 onChange={(e) => {
@@ -705,7 +705,7 @@ export default function MetricsPage() {
                 }}
                 className="w-full bg-slate-950/80 border border-slate-850 text-slate-300 hover:text-white px-2.5 py-2 rounded-xl outline-none focus:border-purple-500/50 transition cursor-pointer"
               >
-                <option value="">All Namespaces</option>
+                <option value="">{t('allNamespaces')}</option>
                 {uniqueNamespaces.map(n => (
                   <option key={n} value={n}>{n}</option>
                 ))}
@@ -714,16 +714,16 @@ export default function MetricsPage() {
           </div>
 
           {loadingRuns ? (
-            <div className="py-12 text-slate-500 text-center text-xs">Loading...</div>
+            <div className="py-12 text-slate-500 text-center text-xs">{t('loading')}</div>
           ) : error ? (
             <div className="py-8 px-4 text-center text-red-400 bg-red-500/5 border border-red-500/10 rounded-2xl space-y-2">
               <p className="text-xs font-semibold">{error}</p>
               <p className="text-[10px] text-slate-500 max-w-[200px] mx-auto">
-                Make sure InfluxDB is port-forwarded and correctly configured in settings.
+                {t('influxPortForwardHint')}
               </p>
             </div>
           ) : filteredRuns.length === 0 ? (
-            <div className="py-12 text-slate-500 text-center text-xs">No test runs match selected filters.</div>
+            <div className="py-12 text-slate-500 text-center text-xs">{t('noRunsMatchFilters')}</div>
           ) : (
             <div className="space-y-3 overflow-y-auto max-h-[600px] pr-1">
               {Object.entries(groupedRuns).map(([baseName, groupRuns]) => {
@@ -741,7 +741,7 @@ export default function MetricsPage() {
                       </div>
                       {selectedInGroup.length > 0 && (
                         <span className="px-2 py-0.5 bg-purple-500/10 text-purple-400 border border-purple-500/20 rounded-md text-[9px] font-bold">
-                          {selectedInGroup.length} Selected
+                          {t('runsSelected', { count: selectedInGroup.length })}
                         </span>
                       )}
                     </div>
@@ -797,8 +797,8 @@ export default function MetricsPage() {
                               )}
 
                               <div className="grid grid-cols-2 gap-1.5 pt-1.5 border-t border-slate-850/40 text-[9px] text-slate-400">
-                                <div>VUs Max : <strong className="text-slate-200">{run.max_vus}</strong></div>
-                                <div>Avg : <strong className="text-slate-200">{run.avg_req_duration_ms}ms</strong></div>
+                                <div>{t('vusMax')} : <strong className="text-slate-200">{run.max_vus}</strong></div>
+                                <div>{t('avgShort')} : <strong className="text-slate-200">{run.avg_req_duration_ms}ms</strong></div>
                               </div>
                             </div>
                           );
@@ -820,7 +820,7 @@ export default function MetricsPage() {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800/80 pb-4">
                 <div className="min-w-0">
                   <h3 className="text-lg font-bold text-white truncate">
-                    {selectedRunKeys.length === 1 ? displayRunName(selectedRunKey) : `Comparing ${selectedRunKeys.length} Runs`}
+                    {selectedRunKeys.length === 1 ? displayRunName(selectedRunKey) : t('comparingRuns', { count: selectedRunKeys.length })}
                   </h3>
                   <p className="text-xs text-slate-500 mt-0.5">
                     {t('telemetry')}
@@ -852,15 +852,15 @@ export default function MetricsPage() {
                     onChange={(e) => setTimeRange(e.target.value)}
                     className="bg-slate-950/80 border border-slate-850 text-slate-300 hover:text-white px-3 py-1.5 rounded-xl text-xs transition cursor-pointer outline-none focus:border-purple-500/50"
                   >
-                    <option value="5m">5 Minutes</option>
-                    <option value="15m">15 Minutes</option>
-                    <option value="30m">30 Minutes</option>
-                    <option value="1h">1 Hour</option>
-                    <option value="3h">3 Hours</option>
-                    <option value="6h">6 Hours</option>
-                    <option value="12h">12 Hours</option>
-                    <option value="24h">24 Hours</option>
-                    <option value="7d">7 Days</option>
+                    <option value="5m">{t('timeRange5m')}</option>
+                    <option value="15m">{t('timeRange15m')}</option>
+                    <option value="30m">{t('timeRange30m')}</option>
+                    <option value="1h">{t('timeRange1h')}</option>
+                    <option value="3h">{t('timeRange3h')}</option>
+                    <option value="6h">{t('timeRange6h')}</option>
+                    <option value="12h">{t('timeRange12h')}</option>
+                    <option value="24h">{t('timeRange24h')}</option>
+                    <option value="7d">{t('timeRange7d')}</option>
                   </select>
 
                   {/* Metric Toggle */}
@@ -893,7 +893,7 @@ export default function MetricsPage() {
                           : 'text-slate-500 hover:text-slate-300'
                       }`}
                     >
-                      {t('metricErrorToggle') || 'Error Rate (http_req_failed)'}
+                      {t('metricErrorToggle')}
                     </button>
                   </div>
                 </div>

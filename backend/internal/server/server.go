@@ -45,7 +45,7 @@ type Server struct {
 
 func NewServer(cfg *config.Config, db *database.DB) *Server {
 	authSvc := auth.NewAuthService(cfg.JWTSecret, db)
-	
+
 	var active *database.InfluxConfig
 	if cfg.InfluxURL != "" {
 		active = &database.InfluxConfig{
@@ -167,6 +167,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("PUT /api/k8s/clusters/{id}", s.authMiddleware(s.adminOnly(s.handleUpdateCluster)))
 	mux.HandleFunc("DELETE /api/k8s/clusters/{id}", s.authMiddleware(s.adminOnly(s.handleDeleteCluster)))
 	mux.HandleFunc("GET /api/k8s/clusters/{id}/namespaces", s.authMiddleware(s.handleListNamespaces))
+	mux.HandleFunc("GET /api/k8s/clusters/{id}/ecr/check", s.authMiddleware(s.handleCheckECRRepo))
 	mux.HandleFunc("GET /api/k8s/local-contexts", s.authMiddleware(s.adminOnly(s.handleListLocalContexts)))
 	mux.HandleFunc("GET /api/k8s/operator-status", s.authMiddleware(s.handleGetOperatorStatus))
 	mux.HandleFunc("GET /api/k8s/active-tests", s.authMiddleware(s.handleGetActiveTests))
@@ -176,7 +177,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("POST /api/settings/influxdb", s.authMiddleware(s.adminOnly(s.handleSetInfluxDBConfig)))
 	mux.HandleFunc("POST /api/settings/influxdb/test", s.authMiddleware(s.adminOnly(s.handleTestInfluxDBConfig)))
 	mux.HandleFunc("GET /api/settings/influxdb/servers", s.authMiddleware(s.handleListInfluxServers))
-	mux.HandleFunc("POST /api/settings/influxdb/servers", s.authMiddleware(s.adminOnly(s.handleCreateInfluxServer)) )
+	mux.HandleFunc("POST /api/settings/influxdb/servers", s.authMiddleware(s.adminOnly(s.handleCreateInfluxServer)))
 	mux.HandleFunc("PUT /api/settings/influxdb/servers/{id}", s.authMiddleware(s.adminOnly(s.handleUpdateInfluxServer)))
 	mux.HandleFunc("DELETE /api/settings/influxdb/servers/{id}", s.authMiddleware(s.adminOnly(s.handleDeleteInfluxServer)))
 	mux.HandleFunc("POST /api/settings/influxdb/servers/{id}/activate", s.authMiddleware(s.handleActivateInfluxServer))
@@ -199,6 +200,10 @@ func (s *Server) Start() error {
 	mux.HandleFunc("PUT /api/settings/templates/{id}", s.authMiddleware(s.editorOrAdmin(s.handleUpdateTemplate)))
 	mux.HandleFunc("DELETE /api/settings/templates/{id}", s.authMiddleware(s.editorOrAdmin(s.handleDeleteTemplate)))
 
+	// Run defaults routes (editor+)
+	mux.HandleFunc("GET /api/settings/defaults", s.authMiddleware(s.handleGetRunDefaults))
+	mux.HandleFunc("POST /api/settings/defaults", s.authMiddleware(s.editorOrAdmin(s.handleSaveRunDefaults)))
+
 	// API Tokens management routes
 	mux.HandleFunc("GET /api/settings/tokens", s.authMiddleware(s.adminOnly(s.handleListAPITokens)))
 	mux.HandleFunc("POST /api/settings/tokens", s.authMiddleware(s.adminOnly(s.handleGenerateAPIToken)))
@@ -209,6 +214,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("POST /api/k8s/clusters/{id}/crds", s.authMiddleware(s.editorOrAdmin(s.handleCreateCRD)))
 	mux.HandleFunc("DELETE /api/k8s/clusters/{id}/crds/{name}", s.authMiddleware(s.editorOrAdmin(s.handleDeleteCRD)))
 	mux.HandleFunc("POST /api/k8s/clusters/{id}/crds/{name}/relaunch", s.authMiddleware(s.editorOrAdmin(s.handleRelaunchCRD)))
+	mux.HandleFunc("GET /api/k8s/clusters/{id}/batch-workloads", s.authMiddleware(s.handleListBatchWorkloads))
+	mux.HandleFunc("POST /api/k8s/clusters/{id}/batch-workloads/cronjobs/{name}/toggle", s.authMiddleware(s.editorOrAdmin(s.handleToggleBatchCronJob)))
 	mux.HandleFunc("GET /api/k8s/clusters/{id}/configmaps/{name}", s.authMiddleware(s.handleGetConfigMap))
 	mux.HandleFunc("GET /api/k8s/clusters/{id}/configmaps", s.authMiddleware(s.handleListConfigMaps))
 	mux.HandleFunc("PUT /api/k8s/clusters/{id}/configmaps/{name}", s.authMiddleware(s.editorOrAdmin(s.handleUpdateConfigMap)))
@@ -228,12 +235,15 @@ func (s *Server) Start() error {
 	// Schedules routes
 	mux.HandleFunc("GET /api/settings/schedules", s.authMiddleware(s.handleListSchedules))
 	mux.HandleFunc("POST /api/settings/schedules", s.authMiddleware(s.editorOrAdmin(s.handleCreateSchedule)))
+	mux.HandleFunc("PUT /api/settings/schedules/{id}", s.authMiddleware(s.editorOrAdmin(s.handleUpdateSchedule)))
 	mux.HandleFunc("DELETE /api/settings/schedules/{id}", s.authMiddleware(s.editorOrAdmin(s.handleDeleteSchedule)))
 	mux.HandleFunc("POST /api/settings/schedules/{id}/run", s.authMiddleware(s.editorOrAdmin(s.handleRunSchedule)))
 	mux.HandleFunc("POST /api/settings/schedules/{id}/toggle", s.authMiddleware(s.editorOrAdmin(s.handleToggleSchedule)))
 
 	// Wrap in CORS middleware
 	handler := s.corsMiddleware(mux)
+
+	s.startScheduleRunner()
 
 	log.Printf("Server listening on port %s", s.config.Port)
 	return http.ListenAndServe(":"+s.config.Port, handler)
@@ -404,10 +414,7 @@ func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, c := range list {
-		// Populate region dynamically if not set
-		if c.Region == "" {
-			c.Region = parseRegion(c.APIServerURL)
-		}
+		s.enrichClusterMetadata(r.Context(), c, true)
 		// Populate version dynamically if not set
 		if c.KubernetesVersion == "" {
 			c.KubernetesVersion = s.queryKubernetesVersion(c.ID)
@@ -423,10 +430,11 @@ func (s *Server) handleRegisterCluster(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name         string `json:"name"`
 		APIServerURL string `json:"api_server_url"`
-		AuthType     string `json:"auth_type"` // "kubeconfig", "token", or "local"
+		AuthType     string `json:"auth_type"`  // "kubeconfig", "token", or "local"
 		RawSecret    string `json:"raw_secret"` // kubeconfig YAML, SA Token, or context name
 		CACertBase64 string `json:"ca_cert_base64"`
-		Namespaces   string `json:"namespaces"` // Comma-separated list of namespaces
+		Namespaces   string `json:"namespaces"`     // Comma-separated list of namespaces
+		AWSAccountID string `json:"aws_account_id"` // AWS Account ID for ECR image resolution
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
@@ -485,7 +493,9 @@ func (s *Server) handleRegisterCluster(w http.ResponseWriter, r *http.Request) {
 		CACertBase64:  body.CACertBase64,
 		CreatedAt:     time.Now(),
 		Namespaces:    body.Namespaces,
+		AWSAccountID:  strings.TrimSpace(body.AWSAccountID),
 	}
+	s.enrichClusterMetadata(r.Context(), newCluster, false)
 
 	if s.db != nil {
 		if err := s.db.SaveCluster(newCluster); err != nil {
@@ -508,10 +518,11 @@ func (s *Server) handleUpdateCluster(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name         string `json:"name"`
 		APIServerURL string `json:"api_server_url"`
-		AuthType     string `json:"auth_type"` // "kubeconfig", "token", or "local"
+		AuthType     string `json:"auth_type"`  // "kubeconfig", "token", or "local"
 		RawSecret    string `json:"raw_secret"` // Optional if preserving existing
 		CACertBase64 string `json:"ca_cert_base64"`
-		Namespaces   string `json:"namespaces"` // Comma-separated list of namespaces
+		Namespaces   string `json:"namespaces"`     // Comma-separated list of namespaces
+		AWSAccountID string `json:"aws_account_id"` // AWS Account ID for ECR image resolution
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
@@ -557,6 +568,11 @@ func (s *Server) handleUpdateCluster(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	awsAccountID := strings.TrimSpace(body.AWSAccountID)
+	if awsAccountID == "" {
+		awsAccountID = existing.AWSAccountID
+	}
+
 	updatedCluster := &ClusterConfig{
 		ID:            id,
 		Name:          body.Name,
@@ -566,7 +582,10 @@ func (s *Server) handleUpdateCluster(w http.ResponseWriter, r *http.Request) {
 		CACertBase64:  body.CACertBase64,
 		CreatedAt:     existing.CreatedAt,
 		Namespaces:    body.Namespaces,
+		AWSAccountID:  awsAccountID,
+		Region:        existing.Region,
 	}
+	s.enrichClusterMetadata(r.Context(), updatedCluster, false)
 
 	if s.db != nil {
 		if err := s.db.SaveCluster(updatedCluster); err != nil {
@@ -700,7 +719,6 @@ func (s *Server) handleListCRDs(w http.ResponseWriter, r *http.Request) {
 
 	var resultList []interface{}
 
-	// 1. List K6 CRDs
 	crdItems, err := client.ListK6CustomResources(r.Context(), namespace)
 	if err == nil {
 		for _, item := range crdItems {
@@ -708,17 +726,54 @@ func (s *Server) handleListCRDs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 2. List Jobs
-	jobList, err := client.Clientset.BatchV1().Jobs(namespace).List(r.Context(), metav1.ListOptions{
-		LabelSelector: "k6s=enabled",
-	})
-	if err == nil {
-		for _, job := range jobList.Items {
-			resultList = append(resultList, s.mapJobToUI(&job))
-		}
+	if resultList == nil {
+		resultList = []interface{}{}
 	}
 
-	// 3. List CronJobs
+	json.NewEncoder(w).Encode(resultList)
+}
+
+func (s *Server) handleListBatchWorkloads(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	namespace := r.URL.Query().Get("namespace")
+	if namespace == "all" {
+		namespace = ""
+	} else if namespace == "" {
+		namespace = "default"
+	}
+
+	client, isMock, err := s.getClusterClient(id)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%v"}`, err), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if isMock {
+		json.NewEncoder(w).Encode([]interface{}{
+			map[string]interface{}{
+				"kind": "CronJob",
+				"metadata": map[string]interface{}{
+					"name":              "mock-k6-cron",
+					"namespace":         "default",
+					"creationTimestamp": time.Now().Format(time.RFC3339),
+				},
+				"spec": map[string]interface{}{
+					"parallelism": 1,
+					"schedule":    "0 */6 * * *",
+				},
+				"status": map[string]interface{}{
+					"stage":    "scheduled",
+					"active":   true,
+					"suspended": false,
+				},
+			},
+		})
+		return
+	}
+
+	var resultList []interface{}
+
 	cjList, err := client.Clientset.BatchV1().CronJobs(namespace).List(r.Context(), metav1.ListOptions{
 		LabelSelector: "k6s=enabled",
 	})
@@ -728,11 +783,71 @@ func (s *Server) handleListCRDs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	jobList, err := client.Clientset.BatchV1().Jobs(namespace).List(r.Context(), metav1.ListOptions{
+		LabelSelector: "k6s=enabled",
+	})
+	if err == nil {
+		for _, job := range jobList.Items {
+			resultList = append(resultList, s.mapJobToUI(&job))
+		}
+	}
+
 	if resultList == nil {
 		resultList = []interface{}{}
 	}
 
 	json.NewEncoder(w).Encode(resultList)
+}
+
+func (s *Server) handleToggleBatchCronJob(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	name := r.PathValue("name")
+	namespace := r.URL.Query().Get("namespace")
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	client, isMock, err := s.getClusterClient(id)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%v"}`, err), http.StatusBadRequest)
+		return
+	}
+
+	if isMock {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"kind": "CronJob",
+			"metadata": map[string]interface{}{
+				"name":      name,
+				"namespace": namespace,
+			},
+			"status": map[string]interface{}{
+				"active":    true,
+				"suspended": false,
+				"stage":     "scheduled",
+			},
+		})
+		return
+	}
+
+	cj, err := client.Clientset.BatchV1().CronJobs(namespace).Get(r.Context(), name, metav1.GetOptions{})
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"failed to get CronJob: %v"}`, err), http.StatusNotFound)
+		return
+	}
+
+	suspended := cj.Spec.Suspend != nil && *cj.Spec.Suspend
+	next := !suspended
+	cj.Spec.Suspend = &next
+
+	updated, err := client.Clientset.BatchV1().CronJobs(namespace).Update(r.Context(), cj, metav1.UpdateOptions{})
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"failed to update CronJob: %v"}`, err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.mapCronJobToUI(updated))
 }
 
 func (s *Server) handleCreateCRD(w http.ResponseWriter, r *http.Request) {
@@ -753,6 +868,8 @@ func (s *Server) handleCreateCRD(w http.ResponseWriter, r *http.Request) {
 		ScriptContent  string                 `json:"scriptContent"`
 		Schedule       bool                   `json:"schedule"`
 		CronExpression string                 `json:"cronExpression"`
+		ResourceKind   string                 `json:"resource_kind"`
+		Active         *bool                  `json:"active"`
 		Spec           map[string]interface{} `json:"spec"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -760,10 +877,18 @@ func (s *Server) handleCreateCRD(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	resourceKind := strings.ToLower(strings.TrimSpace(payload.ResourceKind))
+	if resourceKind == "" {
+		resourceKind = "testrun"
+	}
+
 	configMapName := "cm-" + payload.Name
 	scriptFile := "script.js"
 
 	specMap := payload.Spec
+	if resourceKind == "testrun" && specMap == nil {
+		specMap = map[string]interface{}{}
+	}
 	if specMap != nil {
 		if scriptMap, ok := specMap["script"].(map[string]interface{}); ok {
 			if cmMap, ok := scriptMap["configMap"].(map[string]interface{}); ok {
@@ -792,14 +917,20 @@ func (s *Server) handleCreateCRD(w http.ResponseWriter, r *http.Request) {
 		}
 
 		cmClient := client.Clientset.CoreV1().ConfigMaps(namespace)
-		_, getErr := cmClient.Get(r.Context(), configMapName, metav1.GetOptions{})
+		existing, getErr := cmClient.Get(r.Context(), configMapName, metav1.GetOptions{})
 		if getErr != nil {
-			_, err = cmClient.Create(r.Context(), cm, metav1.CreateOptions{})
-			if err != nil {
-				http.Error(w, fmt.Sprintf(`{"error":"failed to create ConfigMap: %v"}`, err), http.StatusInternalServerError)
+			if apierrors.IsNotFound(getErr) {
+				_, err = cmClient.Create(r.Context(), cm, metav1.CreateOptions{})
+				if err != nil {
+					http.Error(w, fmt.Sprintf(`{"error":"failed to create ConfigMap: %v"}`, err), http.StatusInternalServerError)
+					return
+				}
+			} else {
+				http.Error(w, fmt.Sprintf(`{"error":"failed to fetch ConfigMap: %v"}`, getErr), http.StatusInternalServerError)
 				return
 			}
 		} else {
+			cm.ResourceVersion = existing.ResourceVersion
 			_, err = cmClient.Update(r.Context(), cm, metav1.UpdateOptions{})
 			if err != nil {
 				http.Error(w, fmt.Sprintf(`{"error":"failed to update ConfigMap: %v"}`, err), http.StatusInternalServerError)
@@ -810,7 +941,22 @@ func (s *Server) handleCreateCRD(w http.ResponseWriter, r *http.Request) {
 
 	if isMock {
 		w.Header().Set("Content-Type", "application/json")
-		if payload.Schedule {
+		switch resourceKind {
+		case "testrun":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"apiVersion": "k6.io/v1alpha1",
+				"kind":       "TestRun",
+				"metadata": map[string]interface{}{
+					"name":              payload.Name,
+					"namespace":         namespace,
+					"creationTimestamp": time.Now().Format(time.RFC3339),
+				},
+				"spec": payload.Spec,
+				"status": map[string]interface{}{
+					"stage": "running",
+				},
+			})
+		case "cronjob":
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"kind": "CronJob",
 				"metadata": map[string]interface{}{
@@ -826,7 +972,7 @@ func (s *Server) handleCreateCRD(w http.ResponseWriter, r *http.Request) {
 					"stage": "scheduled",
 				},
 			})
-		} else {
+		default:
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"kind": "Job",
 				"metadata": map[string]interface{}{
@@ -845,6 +991,16 @@ func (s *Server) handleCreateCRD(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	clusterConfig := s.getClusterConfig(id)
+
+	var defaultEnvEntries []runDefaultEnvVar
+	if s.db != nil {
+		envRaw, _ := s.db.GetSetting("run_default_env_vars")
+		if envRaw != "" {
+			_ = json.Unmarshal([]byte(envRaw), &defaultEnvEntries)
+		}
+	}
+
 	var parallelismVal int32 = 1
 	if specMap != nil {
 		if p, ok := specMap["parallelism"].(float64); ok {
@@ -859,7 +1015,9 @@ func (s *Server) handleCreateCRD(w http.ResponseWriter, r *http.Request) {
 	if specMap != nil {
 		if runnerMap, ok := specMap["runner"].(map[string]interface{}); ok {
 			if specRunnerImage, ok := runnerMap["image"].(string); ok && specRunnerImage != "" {
-				image = specRunnerImage
+				resolvedImage := resolveClusterImage(specRunnerImage, clusterConfig)
+				image = resolvedImage
+				runnerMap["image"] = resolvedImage
 			}
 			if resMap, ok := runnerMap["resources"].(map[string]interface{}); ok {
 				if limMap, ok := resMap["limits"].(map[string]interface{}); ok {
@@ -874,6 +1032,23 @@ func (s *Server) handleCreateCRD(w http.ResponseWriter, r *http.Request) {
 							limits[corev1.ResourceMemory] = q
 						}
 					}
+				}
+			}
+
+			if resourceKind == "testrun" && runnerMap["env"] == nil && len(defaultEnvEntries) > 0 {
+				envPayload := make([]map[string]string, 0, len(defaultEnvEntries))
+				for _, entry := range defaultEnvEntries {
+					key := strings.TrimSpace(entry.Key)
+					if key == "" {
+						continue
+					}
+					envPayload = append(envPayload, map[string]string{
+						"name":  key,
+						"value": entry.Value,
+					})
+				}
+				if len(envPayload) > 0 {
+					runnerMap["env"] = envPayload
 				}
 			}
 		}
@@ -892,6 +1067,47 @@ func (s *Server) handleCreateCRD(w http.ResponseWriter, r *http.Request) {
 			runArgs = append(runArgs, parts...)
 		}
 	}
+
+	var envVars []corev1.EnvVar
+	if specMap != nil {
+		if runnerMap, ok := specMap["runner"].(map[string]interface{}); ok {
+			if envList, ok := runnerMap["env"].([]interface{}); ok {
+				for _, item := range envList {
+					entry, ok := item.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					name := ""
+					if keyVal, ok := entry["name"].(string); ok {
+						name = strings.TrimSpace(keyVal)
+					} else if keyVal, ok := entry["key"].(string); ok {
+						name = strings.TrimSpace(keyVal)
+					}
+					if name == "" {
+						continue
+					}
+					val := ""
+					if valueVal, ok := entry["value"].(string); ok {
+						val = valueVal
+					}
+					envVars = append(envVars, corev1.EnvVar{Name: name, Value: val})
+				}
+			}
+		}
+	}
+
+	if len(envVars) == 0 && len(defaultEnvEntries) > 0 {
+		for _, entry := range defaultEnvEntries {
+			key := strings.TrimSpace(entry.Key)
+			if key == "" {
+				continue
+			}
+			envVars = append(envVars, corev1.EnvVar{
+				Name:  key,
+				Value: entry.Value,
+			})
+		}
+	}
 	jobSpec := batchv1.JobSpec{
 		Parallelism: &parallelismVal,
 		Template: corev1.PodTemplateSpec{
@@ -907,6 +1123,7 @@ func (s *Server) handleCreateCRD(w http.ResponseWriter, r *http.Request) {
 						Name:      "k6-runner",
 						Image:     image,
 						Args:      runArgs,
+						Env:       envVars,
 						Resources: resources,
 						VolumeMounts: []corev1.VolumeMount{
 							{
@@ -932,7 +1149,39 @@ func (s *Server) handleCreateCRD(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	if payload.Schedule {
+	switch resourceKind {
+	case "testrun":
+		resourceName := sanitizeDNSLabel(payload.Name, maxDNSLabelLength)
+		if resourceName == "" {
+			http.Error(w, `{"error":"invalid test run name"}`, http.StatusBadRequest)
+			return
+		}
+		obj := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": "k6.io/v1alpha1",
+				"kind":       "TestRun",
+				"metadata": map[string]interface{}{
+					"name":      resourceName,
+					"namespace": namespace,
+					"labels": map[string]string{
+						"k6s": "enabled",
+					},
+				},
+				"spec": specMap,
+			},
+		}
+		created, err := client.CreateK6CustomResource(r.Context(), namespace, obj)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"failed to create TestRun: %v"}`, err), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(created.Object)
+	case "cronjob":
+		if payload.CronExpression == "" {
+			http.Error(w, `{"error":"missing cron expression"}`, http.StatusBadRequest)
+			return
+		}
 		cronJob := &batchv1.CronJob{
 			TypeMeta: metav1.TypeMeta{
 				APIVersion: "batch/v1",
@@ -958,6 +1207,23 @@ func (s *Server) handleCreateCRD(w http.ResponseWriter, r *http.Request) {
 				},
 			},
 		}
+		if payload.Active != nil {
+			suspend := !*payload.Active
+			cronJob.Spec.Suspend = &suspend
+		}
+
+		existingCronJob, err := client.Clientset.BatchV1().CronJobs(namespace).Get(r.Context(), payload.Name, metav1.GetOptions{})
+		if err == nil {
+			cronJob.ResourceVersion = existingCronJob.ResourceVersion
+			updatedCronJob, updateErr := client.Clientset.BatchV1().CronJobs(namespace).Update(r.Context(), cronJob, metav1.UpdateOptions{})
+			if updateErr != nil {
+				http.Error(w, fmt.Sprintf(`{"error":"failed to update CronJob: %v"}`, updateErr), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(s.mapCronJobToUI(updatedCronJob))
+			return
+		}
 
 		createdCronJob, err := client.Clientset.BatchV1().CronJobs(namespace).Create(r.Context(), cronJob, metav1.CreateOptions{})
 		if err != nil {
@@ -966,7 +1232,7 @@ func (s *Server) handleCreateCRD(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(s.mapCronJobToUI(createdCronJob))
-	} else {
+	default:
 		job := &batchv1.Job{
 			TypeMeta: metav1.TypeMeta{
 				APIVersion: "batch/v1",
@@ -980,6 +1246,18 @@ func (s *Server) handleCreateCRD(w http.ResponseWriter, r *http.Request) {
 				},
 			},
 			Spec: jobSpec,
+		}
+
+		existingJob, err := client.Clientset.BatchV1().Jobs(namespace).Get(r.Context(), payload.Name, metav1.GetOptions{})
+		if err == nil {
+			job.ResourceVersion = existingJob.ResourceVersion
+			updatedJob, updateErr := client.Clientset.BatchV1().Jobs(namespace).Update(r.Context(), job, metav1.UpdateOptions{})
+			if updateErr == nil {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(s.mapJobToUI(updatedJob))
+				return
+			}
+			_ = client.Clientset.BatchV1().Jobs(namespace).Delete(r.Context(), payload.Name, metav1.DeleteOptions{})
 		}
 
 		createdJob, err := client.Clientset.BatchV1().Jobs(namespace).Create(r.Context(), job, metav1.CreateOptions{})
@@ -1062,8 +1340,26 @@ func (s *Server) mapJobToUI(job *batchv1.Job) map[string]interface{} {
 	}
 
 	image := ""
+	cpuLimit := ""
+	memLimit := ""
+	var envList []map[string]string
 	if len(job.Spec.Template.Spec.Containers) > 0 {
-		image = job.Spec.Template.Spec.Containers[0].Image
+		container := job.Spec.Template.Spec.Containers[0]
+		image = container.Image
+		if cpuQty, ok := container.Resources.Limits[corev1.ResourceCPU]; ok {
+			cpuLimit = cpuQty.String()
+		}
+		if memQty, ok := container.Resources.Limits[corev1.ResourceMemory]; ok {
+			memLimit = memQty.String()
+		}
+		if len(container.Env) > 0 {
+			for _, envVar := range container.Env {
+				envList = append(envList, map[string]string{
+					"key":   envVar.Name,
+					"value": envVar.Value,
+				})
+			}
+		}
 	}
 
 	argsText := ""
@@ -1077,6 +1373,25 @@ func (s *Server) mapJobToUI(job *batchv1.Job) map[string]interface{} {
 		stage = "finished"
 	} else if job.Status.Failed > 0 {
 		stage = "failed"
+	}
+
+	runnerSpec := map[string]interface{}{
+		"image": image,
+	}
+	if cpuLimit != "" || memLimit != "" {
+		limits := map[string]interface{}{}
+		if cpuLimit != "" {
+			limits["cpu"] = cpuLimit
+		}
+		if memLimit != "" {
+			limits["memory"] = memLimit
+		}
+		runnerSpec["resources"] = map[string]interface{}{
+			"limits": limits,
+		}
+	}
+	if len(envList) > 0 {
+		runnerSpec["env"] = envList
 	}
 
 	return map[string]interface{}{
@@ -1094,9 +1409,7 @@ func (s *Server) mapJobToUI(job *batchv1.Job) map[string]interface{} {
 					"file": cmFile,
 				},
 			},
-			"runner": map[string]interface{}{
-				"image": image,
-			},
+			"runner":    runnerSpec,
 			"arguments": argsText,
 		},
 		"status": map[string]interface{}{
@@ -1129,14 +1442,57 @@ func (s *Server) mapCronJobToUI(cj *batchv1.CronJob) map[string]interface{} {
 	}
 
 	image := ""
+	cpuLimit := ""
+	memLimit := ""
+	var envList []map[string]string
 	if len(cj.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 {
-		image = cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image
+		container := cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0]
+		image = container.Image
+		if cpuQty, ok := container.Resources.Limits[corev1.ResourceCPU]; ok {
+			cpuLimit = cpuQty.String()
+		}
+		if memQty, ok := container.Resources.Limits[corev1.ResourceMemory]; ok {
+			memLimit = memQty.String()
+		}
+		if len(container.Env) > 0 {
+			for _, envVar := range container.Env {
+				envList = append(envList, map[string]string{
+					"key":   envVar.Name,
+					"value": envVar.Value,
+				})
+			}
+		}
 	}
 
 	argsText := ""
 	if len(cj.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 && len(cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args) > 2 {
 		args := cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Args
 		argsText = strings.Join(args[2:], " ")
+	}
+
+	runnerSpec := map[string]interface{}{
+		"image": image,
+	}
+	if cpuLimit != "" || memLimit != "" {
+		limits := map[string]interface{}{}
+		if cpuLimit != "" {
+			limits["cpu"] = cpuLimit
+		}
+		if memLimit != "" {
+			limits["memory"] = memLimit
+		}
+		runnerSpec["resources"] = map[string]interface{}{
+			"limits": limits,
+		}
+	}
+	if len(envList) > 0 {
+		runnerSpec["env"] = envList
+	}
+
+	suspended := cj.Spec.Suspend != nil && *cj.Spec.Suspend
+	stage := "scheduled"
+	if suspended {
+		stage = "inactive"
 	}
 
 	return map[string]interface{}{
@@ -1155,13 +1511,13 @@ func (s *Server) mapCronJobToUI(cj *batchv1.CronJob) map[string]interface{} {
 					"file": cmFile,
 				},
 			},
-			"runner": map[string]interface{}{
-				"image": image,
-			},
+			"runner":    runnerSpec,
 			"arguments": argsText,
 		},
 		"status": map[string]interface{}{
-			"stage": "scheduled",
+			"stage":     stage,
+			"active":    !suspended,
+			"suspended": suspended,
 		},
 	}
 }
@@ -1555,11 +1911,9 @@ func (s *Server) getMockK6CRDs(namespace string) []map[string]interface{} {
 	}
 }
 
-
-
 func (s *Server) handleGetInfluxDBConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	if os.Getenv("INFLUXDB_URL") != "" {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"id":          "influx-env",
@@ -1822,7 +2176,7 @@ func (s *Server) handleCreateInfluxServer(w http.ResponseWriter, r *http.Request
 		_ = s.db.SetActiveInfluxConfig(newConfig.ID)
 		s.influxSvc.Close()
 		s.influxSvc = influx.NewMetricsService(newConfig.Version, newConfig.URL, newConfig.Token, newConfig.Org, newConfig.Bucket, newConfig.Username, newConfig.Password, newConfig.Method)
-		
+
 		s.config.InfluxURL = newConfig.URL
 		s.config.InfluxToken = newConfig.Token
 		s.config.InfluxOrg = newConfig.Org
@@ -1911,7 +2265,7 @@ func (s *Server) handleUpdateInfluxServer(w http.ResponseWriter, r *http.Request
 	if updated.IsActive {
 		s.influxSvc.Close()
 		s.influxSvc = influx.NewMetricsService(updated.Version, updated.URL, updated.Token, updated.Org, updated.Bucket, updated.Username, updated.Password, updated.Method)
-		
+
 		s.config.InfluxURL = updated.URL
 		s.config.InfluxToken = updated.Token
 		s.config.InfluxOrg = updated.Org
@@ -2153,7 +2507,6 @@ func (s *Server) checkK6OperatorInstalled(clusterID string) bool {
 
 	return s.checkK6OperatorWithClient(client, namespaces)
 }
-
 
 func (s *Server) handleListNamespaces(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -2400,14 +2753,121 @@ func (s *Server) handleGetActiveTests(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
+// Run Defaults: global defaults for output arguments, image, and env vars.
+// Keys stored in the settings table:
+//   run_default_output_args  (string, the --out ... argument line)
+//   run_default_use_output   (bool string "true"/"false")
+//   run_default_use_image    (bool string "true"/"false")
+//   run_default_image_url    (string)
+//   run_default_env_vars     (JSON array of { key, value })
+
+type runDefaultEnvVar struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+func (s *Server) handleGetRunDefaults(w http.ResponseWriter, r *http.Request) {
 	if s.db == nil {
 		http.Error(w, `{"error":"database not initialized"}`, http.StatusInternalServerError)
 		return
 	}
+	outputArgs, _ := s.db.GetSetting("run_default_output_args")
+	useOutput, _ := s.db.GetSetting("run_default_use_output")
+	useImage, _ := s.db.GetSetting("run_default_use_image")
+	imageURL, _ := s.db.GetSetting("run_default_image_url")
+	envVarsRaw, _ := s.db.GetSetting("run_default_env_vars")
+
+	// Seed defaults on first access
+	if outputArgs == "" {
+		outputArgs = "--out influxdb=http://grafana-hub-influxdb.grafana-hub.svc.cluster.local:8086/k6s"
+	}
+	if useOutput == "" {
+		useOutput = "false"
+	}
+	if useImage == "" {
+		useImage = "false"
+	}
+	if envVarsRaw == "" {
+		envVarsRaw = "[]"
+	}
+
+	var envVars []runDefaultEnvVar
+	if err := json.Unmarshal([]byte(envVarsRaw), &envVars); err != nil {
+		envVars = []runDefaultEnvVar{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"output_args": outputArgs,
+		"use_output":  useOutput,
+		"use_image":   useImage,
+		"image_url":   imageURL,
+		"env_vars":    envVars,
+	})
+}
+
+func (s *Server) handleSaveRunDefaults(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		http.Error(w, `{"error":"database not initialized"}`, http.StatusInternalServerError)
+		return
+	}
+	var body struct {
+		OutputArgs string             `json:"output_args"`
+		UseOutput  string             `json:"use_output"`
+		UseImage   string             `json:"use_image"`
+		ImageURL   string             `json:"image_url"`
+		EnvVars    []runDefaultEnvVar `json:"env_vars"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
+		return
+	}
+
+	cleanedEnv := make([]runDefaultEnvVar, 0, len(body.EnvVars))
+	for _, envVar := range body.EnvVars {
+		key := strings.TrimSpace(envVar.Key)
+		if key == "" {
+			continue
+		}
+		cleanedEnv = append(cleanedEnv, runDefaultEnvVar{
+			Key:   key,
+			Value: strings.TrimSpace(envVar.Value),
+		})
+	}
+	envBytes, err := json.Marshal(cleanedEnv)
+	if err != nil {
+		http.Error(w, `{"error":"invalid env vars"}`, http.StatusBadRequest)
+		return
+	}
+	pairs := map[string]string{
+		"run_default_output_args": body.OutputArgs,
+		"run_default_use_output":  body.UseOutput,
+		"run_default_use_image":   body.UseImage,
+		"run_default_image_url":   body.ImageURL,
+		"run_default_env_vars":    string(envBytes),
+	}
+	for k, v := range pairs {
+		if err := s.db.UpsertSetting(k, v); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"failed to save setting %s: %v"}`, k, err), http.StatusInternalServerError)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"ok":true}`))
+}
+
+func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": "database not initialized"})
+		return
+	}
 	list, err := s.db.GetTemplates()
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"failed to get templates: %v"}`, err), http.StatusInternalServerError)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("failed to get templates: %v", err)})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -2425,6 +2885,7 @@ func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 		Parallelism   int    `json:"parallelism"`
 		ScriptName    string `json:"script_name"`
 		ScriptFile    string `json:"script_file"`
+		RunnerImage   string `json:"runner_image"`
 		CPULimit      string `json:"cpu_limit"`
 		MemLimit      string `json:"mem_limit"`
 		ScriptContent string `json:"script_content"`
@@ -2446,6 +2907,7 @@ func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 		Parallelism:   body.Parallelism,
 		ScriptName:    body.ScriptName,
 		ScriptFile:    body.ScriptFile,
+		RunnerImage:   body.RunnerImage,
 		CPULimit:      body.CPULimit,
 		MemLimit:      body.MemLimit,
 		ScriptContent: body.ScriptContent,
@@ -2477,6 +2939,7 @@ func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		Parallelism   int    `json:"parallelism"`
 		ScriptName    string `json:"script_name"`
 		ScriptFile    string `json:"script_file"`
+		RunnerImage   string `json:"runner_image"`
 		CPULimit      string `json:"cpu_limit"`
 		MemLimit      string `json:"mem_limit"`
 		ScriptContent string `json:"script_content"`
@@ -2497,6 +2960,7 @@ func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		Parallelism:   body.Parallelism,
 		ScriptName:    body.ScriptName,
 		ScriptFile:    body.ScriptFile,
+		RunnerImage:   body.RunnerImage,
 		CPULimit:      body.CPULimit,
 		MemLimit:      body.MemLimit,
 		ScriptContent: body.ScriptContent,
@@ -2887,7 +3351,7 @@ func (s *Server) handleSSOCallbackExchange(w http.ResponseWriter, r *http.Reques
 
 	for _, g := range userProfile.Groups {
 		gLower := strings.ToLower(strings.TrimSpace(g))
-		
+
 		for _, adminG := range adminGroupList {
 			if gLower == adminG {
 				hasAdminGroup = true
@@ -3063,13 +3527,22 @@ func (s *Server) handleRelaunchCRD(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	baseName := stripTestRunDateSuffix(oldObj.GetName())
+	resourceName, displayName := buildTestRunNames(baseName, time.Now().UTC())
+	annotations := oldObj.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations["k6s/run-name"] = displayName
+
 	newObj := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": oldObj.GetAPIVersion(),
 			"kind":       oldObj.GetKind(),
 			"metadata": map[string]interface{}{
-				"name":      oldObj.GetName(),
-				"namespace": oldObj.GetNamespace(),
+				"name":        resourceName,
+				"namespace":   oldObj.GetNamespace(),
+				"annotations": annotations,
 			},
 		},
 	}
@@ -3079,14 +3552,6 @@ func (s *Server) handleRelaunchCRD(w http.ResponseWriter, r *http.Request) {
 	if spec, ok := oldObj.Object["spec"]; ok {
 		newObj.Object["spec"] = spec
 	}
-
-	err = client.DeleteK6CustomResource(r.Context(), namespace, name)
-	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"failed to delete existing CRD: %v"}`, err), http.StatusInternalServerError)
-		return
-	}
-
-	time.Sleep(1500 * time.Millisecond)
 
 	created, err := client.CreateK6CustomResource(r.Context(), namespace, newObj)
 	if err != nil {
@@ -3108,12 +3573,24 @@ func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(list)
 }
 
+func isRoundHourCron(expr string) bool {
+	fields := strings.Fields(expr)
+	if len(fields) != 5 {
+		return false
+	}
+	return fields[0] == "0"
+}
+
 func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
-	var sched database.TestSchedule
-	if err := json.NewDecoder(r.Body).Decode(&sched); err != nil {
+	var body struct {
+		database.TestSchedule
+		EnforceRoundHour bool `json:"enforce_round_hour"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
 		return
 	}
+	sched := body.TestSchedule
 
 	if sched.Name == "" || sched.ClusterID == "" || sched.Namespace == "" || sched.TemplateID == "" {
 		http.Error(w, `{"error":"all fields except cron expression are required"}`, http.StatusBadRequest)
@@ -3126,6 +3603,10 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"invalid cron expression (must be exactly 5 fields)"}`, http.StatusBadRequest)
 			return
 		}
+		if body.EnforceRoundHour && !isRoundHourCron(sched.CronExpression) {
+			http.Error(w, `{"error":"schedules must start at a round hour (minute field must be 0)"}`, http.StatusBadRequest)
+			return
+		}
 	}
 
 	sched.CreatedAt = time.Now()
@@ -3134,177 +3615,61 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Deploy to EKS natively if not mock
-	client, isMock, err := s.getClusterClient(sched.ClusterID)
-	if err == nil && !isMock {
-		// Clean schedule name to be dns-compliant
-		dnsName := strings.ToLower(sched.Name)
-		dnsName = strings.ReplaceAll(dnsName, " ", "-")
-		// Remove non-alphanumeric/hyphen characters
-		var cleaned []rune
-		for _, r := range dnsName {
-			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-				cleaned = append(cleaned, r)
-			}
+	if !isScheduled {
+		if err := s.runScheduleTestRun(r.Context(), &sched, "manual"); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"failed to run test: %v"}`, err), http.StatusInternalServerError)
+			return
 		}
-		dnsName = string(cleaned)
-		if len(dnsName) > 52 {
-			dnsName = dnsName[:52]
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(sched)
+}
+
+func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid schedule id"}`, http.StatusBadRequest)
+		return
+	}
+
+	var body struct {
+		database.TestSchedule
+		EnforceRoundHour bool `json:"enforce_round_hour"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	sched := body.TestSchedule
+
+	if sched.Name == "" || sched.ClusterID == "" || sched.Namespace == "" || sched.TemplateID == "" {
+		http.Error(w, `{"error":"all fields except cron expression are required"}`, http.StatusBadRequest)
+		return
+	}
+
+	if sched.CronExpression != "" {
+		if len(strings.Fields(sched.CronExpression)) != 5 {
+			http.Error(w, `{"error":"invalid cron expression (must be exactly 5 fields)"}`, http.StatusBadRequest)
+			return
 		}
-		dnsName = strings.Trim(dnsName, "-")
-
-		template, tempErr := s.db.GetTemplate(sched.TemplateID)
-		if tempErr == nil && template != nil {
-			configMapName := "cm-" + dnsName
-			scriptFile := template.ScriptFile
-			if scriptFile == "" {
-				scriptFile = "script.js"
-			}
-
-			// 1. Create ConfigMap if script is provided
-			if template.ScriptContent != "" {
-				cm := &corev1.ConfigMap{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      configMapName,
-						Namespace: sched.Namespace,
-						Labels: map[string]string{
-							"k6s": "enabled",
-						},
-					},
-					Data: map[string]string{
-						scriptFile: template.ScriptContent,
-					},
-				}
-				cmClient := client.Clientset.CoreV1().ConfigMaps(sched.Namespace)
-				_, getErr := cmClient.Get(r.Context(), configMapName, metav1.GetOptions{})
-				if getErr != nil {
-					_, _ = cmClient.Create(r.Context(), cm, metav1.CreateOptions{})
-				} else {
-					_, _ = cmClient.Update(r.Context(), cm, metav1.UpdateOptions{})
-				}
-			} else if template.ScriptName != "" {
-				configMapName = template.ScriptName
-			}
-
-			// 2. Resource limits
-			var limits corev1.ResourceList
-			if template.CPULimit != "" || template.MemLimit != "" {
-				limits = make(corev1.ResourceList)
-				if template.CPULimit != "" {
-					if q, err := resource.ParseQuantity(template.CPULimit); err == nil {
-						limits[corev1.ResourceCPU] = q
-					}
-				}
-				if template.MemLimit != "" {
-					if q, err := resource.ParseQuantity(template.MemLimit); err == nil {
-						limits[corev1.ResourceMemory] = q
-					}
-				}
-			}
-			resources := corev1.ResourceRequirements{}
-			if len(limits) > 0 {
-				resources.Limits = limits
-			}
-
-			// 3. Parallelism
-			parallelismVal := int32(template.Parallelism)
-			if parallelismVal <= 0 {
-				parallelismVal = 1
-			}
-
-			// 4. Runner Image
-			image := "grafana/k6:latest"
-
-			// 5. Arguments
-			var runArgs []string
-			runArgs = append(runArgs, "run", "/script/"+scriptFile)
-			jobSpec := batchv1.JobSpec{
-				Parallelism: &parallelismVal,
-				Template: corev1.PodTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{
-						Labels: map[string]string{
-							"k6s": "enabled",
-						},
-					},
-					Spec: corev1.PodSpec{
-						RestartPolicy: corev1.RestartPolicyNever,
-						Containers: []corev1.Container{
-							{
-								Name:      "k6-runner",
-								Image:     image,
-								Args:      runArgs,
-								Resources: resources,
-								VolumeMounts: []corev1.VolumeMount{
-									{
-										Name:      "script-volume",
-										MountPath: "/script",
-									},
-								},
-							},
-						},
-						Volumes: []corev1.Volume{
-							{
-								Name: "script-volume",
-								VolumeSource: corev1.VolumeSource{
-									ConfigMap: &corev1.ConfigMapVolumeSource{
-										LocalObjectReference: corev1.LocalObjectReference{
-											Name: configMapName,
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			}
-
-			if isScheduled {
-				suspendVal := !sched.Active
-				cronJob := &batchv1.CronJob{
-					TypeMeta: metav1.TypeMeta{
-						APIVersion: "batch/v1",
-						Kind:       "CronJob",
-					},
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      dnsName,
-						Namespace: sched.Namespace,
-						Labels: map[string]string{
-							"k6s": "enabled",
-						},
-					},
-					Spec: batchv1.CronJobSpec{
-						Schedule:          sched.CronExpression,
-						ConcurrencyPolicy: batchv1.ForbidConcurrent,
-						Suspend:           &suspendVal,
-						JobTemplate: batchv1.JobTemplateSpec{
-							ObjectMeta: metav1.ObjectMeta{
-								Labels: map[string]string{
-									"k6s": "enabled",
-								},
-							},
-							Spec: jobSpec,
-						},
-					},
-				}
-				_, _ = client.Clientset.BatchV1().CronJobs(sched.Namespace).Create(r.Context(), cronJob, metav1.CreateOptions{})
-			} else {
-				job := &batchv1.Job{
-					TypeMeta: metav1.TypeMeta{
-						APIVersion: "batch/v1",
-						Kind:       "Job",
-					},
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      dnsName,
-						Namespace: sched.Namespace,
-						Labels: map[string]string{
-							"k6s": "enabled",
-						},
-					},
-					Spec: jobSpec,
-				}
-				_, _ = client.Clientset.BatchV1().Jobs(sched.Namespace).Create(r.Context(), job, metav1.CreateOptions{})
-			}
+		if body.EnforceRoundHour && !isRoundHourCron(sched.CronExpression) {
+			http.Error(w, `{"error":"schedules must start at a round hour (minute field must be 0)"}`, http.StatusBadRequest)
+			return
 		}
+	}
+
+	existing, err := s.db.GetSchedule(id)
+	if err != nil || existing == nil {
+		http.Error(w, `{"error":"schedule not found"}`, http.StatusNotFound)
+		return
+	}
+
+	sched.ID = id
+	if err := s.db.SaveSchedule(&sched); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"failed to update schedule: %v"}`, err), http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -3365,160 +3730,8 @@ func (s *Server) handleRunSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, isMock, err := s.getClusterClient(sched.ClusterID)
-	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"failed to get cluster client: %v"}`, err), http.StatusInternalServerError)
-		return
-	}
-
-	if isMock {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"success":true}`))
-		return
-	}
-
-	// Clean schedule name to be dns-compliant and unique
-	dnsName := fmt.Sprintf("manual-%s-%d", strings.ToLower(sched.Name), time.Now().Unix())
-	dnsName = strings.ReplaceAll(dnsName, " ", "-")
-	var cleaned []rune
-	for _, r := range dnsName {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-			cleaned = append(cleaned, r)
-		}
-	}
-	dnsName = string(cleaned)
-	if len(dnsName) > 52 {
-		dnsName = dnsName[:52]
-	}
-	dnsName = strings.Trim(dnsName, "-")
-
-	template, tempErr := s.db.GetTemplate(sched.TemplateID)
-	if tempErr != nil || template == nil {
-		http.Error(w, `{"error":"template not found"}`, http.StatusNotFound)
-		return
-	}
-
-	configMapName := "cm-" + dnsName
-	scriptFile := template.ScriptFile
-	if scriptFile == "" {
-		scriptFile = "script.js"
-	}
-
-	// 1. Create ConfigMap if script is provided
-	if template.ScriptContent != "" {
-		cm := &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      configMapName,
-				Namespace: sched.Namespace,
-				Labels: map[string]string{
-					"k6s": "enabled",
-				},
-			},
-			Data: map[string]string{
-				scriptFile: template.ScriptContent,
-			},
-		}
-		cmClient := client.Clientset.CoreV1().ConfigMaps(sched.Namespace)
-		_, getErr := cmClient.Get(r.Context(), configMapName, metav1.GetOptions{})
-		if getErr != nil {
-			_, err = cmClient.Create(r.Context(), cm, metav1.CreateOptions{})
-			if err != nil {
-				http.Error(w, fmt.Sprintf(`{"error":"failed to create ConfigMap: %v"}`, err), http.StatusInternalServerError)
-				return
-			}
-		}
-	} else if template.ScriptName != "" {
-		configMapName = template.ScriptName
-	}
-
-	// 2. Resource limits
-	var limits corev1.ResourceList
-	if template.CPULimit != "" || template.MemLimit != "" {
-		limits = make(corev1.ResourceList)
-		if template.CPULimit != "" {
-			if q, err := resource.ParseQuantity(template.CPULimit); err == nil {
-				limits[corev1.ResourceCPU] = q
-			}
-		}
-		if template.MemLimit != "" {
-			if q, err := resource.ParseQuantity(template.MemLimit); err == nil {
-				limits[corev1.ResourceMemory] = q
-			}
-		}
-	}
-	resources := corev1.ResourceRequirements{}
-	if len(limits) > 0 {
-		resources.Limits = limits
-	}
-
-	// 3. Parallelism
-	parallelismVal := int32(template.Parallelism)
-	if parallelismVal <= 0 {
-		parallelismVal = 1
-	}
-
-	// 4. Runner Image
-	image := "grafana/k6:latest"
-
-	// 5. Arguments
-	var runArgs []string
-	runArgs = append(runArgs, "run", "/script/"+scriptFile)
-	job := &batchv1.Job{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "batch/v1",
-			Kind:       "Job",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      dnsName,
-			Namespace: sched.Namespace,
-			Labels: map[string]string{
-				"k6s": "enabled",
-			},
-		},
-		Spec: batchv1.JobSpec{
-			Parallelism: &parallelismVal,
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						"k6s": "enabled",
-					},
-				},
-				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
-					Containers: []corev1.Container{
-						{
-							Name:      "k6-runner",
-							Image:     image,
-							Args:      runArgs,
-							Resources: resources,
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      "script-volume",
-									MountPath: "/script",
-								},
-							},
-						},
-					},
-					Volumes: []corev1.Volume{
-						{
-							Name: "script-volume",
-							VolumeSource: corev1.VolumeSource{
-								ConfigMap: &corev1.ConfigMapVolumeSource{
-									LocalObjectReference: corev1.LocalObjectReference{
-										Name: configMapName,
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	_, err = client.Clientset.BatchV1().Jobs(sched.Namespace).Create(r.Context(), job, metav1.CreateOptions{})
-	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"failed to create Job: %v"}`, err), http.StatusInternalServerError)
+	if err := s.runScheduleTestRun(r.Context(), sched, "manual"); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"failed to run test: %v"}`, err), http.StatusInternalServerError)
 		return
 	}
 
@@ -3544,39 +3757,6 @@ func (s *Server) handleToggleSchedule(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.SaveSchedule(sched); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"failed to update schedule: %v"}`, err), http.StatusInternalServerError)
 		return
-	}
-
-	// If it is a CronJob (i.e., has a CronExpression), update Spec.Suspend in Kubernetes
-	if sched.CronExpression != "" {
-		client, isMock, err := s.getClusterClient(sched.ClusterID)
-		if err == nil && !isMock {
-			dnsName := strings.ToLower(sched.Name)
-			dnsName = strings.ReplaceAll(dnsName, " ", "-")
-			var cleaned []rune
-			for _, r := range dnsName {
-				if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-					cleaned = append(cleaned, r)
-				}
-			}
-			dnsName = string(cleaned)
-			if len(dnsName) > 52 {
-				dnsName = dnsName[:52]
-			}
-			dnsName = strings.Trim(dnsName, "-")
-
-			cronJobClient := client.Clientset.BatchV1().CronJobs(sched.Namespace)
-			cronJob, getErr := cronJobClient.Get(r.Context(), dnsName, metav1.GetOptions{})
-			if getErr == nil && cronJob != nil {
-				suspendVal := !sched.Active
-				cronJob.Spec.Suspend = &suspendVal
-				_, updateErr := cronJobClient.Update(r.Context(), cronJob, metav1.UpdateOptions{})
-				if updateErr != nil {
-					log.Printf("Error updating CronJob suspend status on cluster: %v", updateErr)
-				}
-			} else {
-				log.Printf("CronJob %s not found in namespace %s: %v", dnsName, sched.Namespace, getErr)
-			}
-		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -3743,6 +3923,3 @@ func (s *Server) handleStreamRunMetrics(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 }
-
-
-

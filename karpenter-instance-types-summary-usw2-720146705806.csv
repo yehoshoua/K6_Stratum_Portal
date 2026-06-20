@@ -1,0 +1,9 @@
+Account,Region,Cluster,InstanceType,Count
+720146705806,us-west-2,eks10,c6a.2xlarge,1
+720146705806,us-west-2,eks10,r5dn.2xlarge,1
+720146705806,us-west-2,eks11,r5dn.2xlarge,2
+720146705806,us-west-2,eks12,r5dn.2xlarge,2
+720146705806,us-west-2,eks13,r5dn.2xlarge,2
+720146705806,us-west-2,eks14,r5dn.2xlarge,2
+720146705806,us-west-2,eks15,r5dn.2xlarge,2
+720146705806,us-west-2,eks16,r5dn.2xlarge,2

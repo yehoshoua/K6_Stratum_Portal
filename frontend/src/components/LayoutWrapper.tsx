@@ -29,7 +29,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   if (isAuthenticated === null) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400 font-medium text-sm">
-        Portal loading...
+        {t('portalLoading')}
       </div>
     );
   }
@@ -54,7 +54,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
             </span>
           </div>
           <div className="text-xs text-slate-500">
-            {t('syncTime')} : {new Date().toLocaleTimeString()}
+            {t('syncTime')} : {new Date().toLocaleTimeString(lang)}
           </div>
         </header>
         <main className="flex-1 p-8 overflow-y-auto">

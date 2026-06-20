@@ -1,6 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
+import { supplementalStrings } from '@/i18n/strings';
 
 export type Language = 'en' | 'fr' | 'he' | 'zh';
 export type Theme = 'light' | 'dark' | 'system';
@@ -35,7 +36,7 @@ interface PreferencesContextType {
   customPalettes: CustomPalette[];
   addCustomPalette: (palette: CustomPalette) => void;
   deleteCustomPalette: (id: string) => void;
-  t: (key: string) => string;
+  t: (key: string, params?: Record<string, string | number>) => string;
 }
 
 const translations = {
@@ -43,9 +44,9 @@ const translations = {
     dashboard: "Dashboard",
     reports: "Reports",
     k8sClusters: "K8s Clusters",
-    crdControl: "K6 Operator CRDs",
+    crdControl: "K6s TestRun CRDs",
     influxdb: "InfluxDB Analytics",
-    schedules: "Schedules",
+    schedules: "CronJob / Job",
     settings: "Settings",
     logout: "Log out",
     connected: "Connected",
@@ -53,7 +54,7 @@ const translations = {
     secureSession: "Secured TLS 1.3 Session",
     syncTime: "Last sync",
     addCluster: "Add Cluster",
-    welcome: "Welcome to K6 Stratum Portal",
+    welcome: "Welcome to K6 Stratos",
     subWelcome: "Kubernetes & Performance Observability Portal",
     username: "Username",
     password: "Password",
@@ -108,6 +109,13 @@ const translations = {
     jsFile: "JS File",
     cpuLimit: "CPU Limit",
     memLimit: "RAM Limit",
+    scheduleTest: "Schedule this test",
+    cronExpression: "Cron expression",
+    cronExample: "Example: */5 * * * *",
+    cronRequired: "Cron expression is required to schedule a test.",
+    cronInvalid: "Cron expression must have exactly 5 fields.",
+    scheduleRequiresScript: "Select a template or use manual script to schedule.",
+    scheduleCreated: "Schedule created successfully!",
     scriptSource: "Script Configuration Method",
     manualScript: "Write script manually",
     existingScript: "Use existing ConfigMap",
@@ -148,7 +156,7 @@ const translations = {
     registeredK8sClusters: "Your K8s Clusters",
     operatorStatus: "Operator Status",
     recommendations: "Help & Recommendations",
-    recDesc: "Use the K6 Operator CRDs menu to schedule and monitor load runs. Consolidated performance metrics are automatically pushed to InfluxDB and viewable in the InfluxDB Analytics panel.",
+    recDesc: "Use the K6s TestRun CRDs menu to schedule and monitor load runs. Consolidated performance metrics are automatically pushed to InfluxDB and viewable in the InfluxDB Analytics panel.",
     metricsTitle: "InfluxDB Analytics",
     metricsSub: "Visualize historical load runs and track http request rates and user counts.",
     metricRateToggle: "Latency (http_req_duration)",
@@ -220,14 +228,15 @@ const translations = {
     createPalette: "Create Palette",
     deletePaletteTitle: "Delete Custom Palette",
     deletePaletteConfirm: "Are you sure you want to delete the custom palette \"{name}\"?",
+    ...supplementalStrings.en,
   },
   fr: {
     dashboard: "Tableau de bord",
     reports: "Rapports",
     k8sClusters: "Clusters K8s",
-    crdControl: "CRDs K6 Operator",
+    crdControl: "CRDs K6s TestRun",
     influxdb: "Analyses InfluxDB",
-    schedules: "Planifications",
+    schedules: "CronJob / Job",
     settings: "Paramètres",
     logout: "Se déconnecter",
     connected: "Connecté",
@@ -235,7 +244,7 @@ const translations = {
     secureSession: "Session TLS 1.3 Sécurisée",
     syncTime: "Dernière synchro",
     addCluster: "Ajouter un Cluster",
-    welcome: "Bienvenue sur K6 Stratum Portal",
+    welcome: "Bienvenue sur K6 Stratos",
     subWelcome: "Portail d'Observabilité Kubernetes & Performance",
     username: "Identifiant",
     password: "Mot de passe",
@@ -290,6 +299,13 @@ const translations = {
     jsFile: "Fichier JS",
     cpuLimit: "Limites CPU",
     memLimit: "Limites RAM",
+    scheduleTest: "Planifier ce test",
+    cronExpression: "Expression cron",
+    cronExample: "Exemple : */5 * * * *",
+    cronRequired: "L'expression cron est requise pour planifier un test.",
+    cronInvalid: "L'expression cron doit contenir exactement 5 champs.",
+    scheduleRequiresScript: "Sélectionnez un modèle ou utilisez un script manuel pour planifier.",
+    scheduleCreated: "Planification créée avec succès !",
     scriptSource: "Méthode de configuration du script",
     manualScript: "Écrire le script manuellement",
     existingScript: "Utiliser une ConfigMap existante",
@@ -402,14 +418,15 @@ const translations = {
     createPalette: "Créer la palette",
     deletePaletteTitle: "Supprimer la palette personnalisée",
     deletePaletteConfirm: "Êtes-vous sûr de vouloir supprimer la palette personnalisée \"{name}\" ?",
+    ...supplementalStrings.fr,
   },
   he: {
     dashboard: "לוח בקרה",
     reports: "דוחות",
     k8sClusters: "K8s Clusters",
-    crdControl: "CRDs של K6 Operator",
+    crdControl: "K6s TestRun CRDs",
     influxdb: "אנליטיקת InfluxDB",
-    schedules: "תזמונים",
+    schedules: "CronJob / Job",
     settings: "הגדרות",
     logout: "התנתק",
     connected: "מחובר",
@@ -417,7 +434,7 @@ const translations = {
     secureSession: "סשן TLS 1.3 מאובטח",
     syncTime: "סנכרון אחרון",
     addCluster: "הוסף אשכול",
-    welcome: "ברוכים הבאים ל-K6 Stratum Portal",
+    welcome: "ברוכים הבאים ל-K6 Stratos",
     subWelcome: "פורטל ניטור ביצועים וקיברנטיס",
     username: "שם משתמש",
     password: "סיסמה",
@@ -472,6 +489,13 @@ const translations = {
     jsFile: "קובץ JS",
     cpuLimit: "מגבלת CPU",
     memLimit: "מגבלת RAM",
+    scheduleTest: "תזמן את הבדיקה",
+    cronExpression: "ביטוי Cron",
+    cronExample: "דוגמה: */5 * * * *",
+    cronRequired: "נדרש ביטוי Cron כדי לתזמן בדיקה.",
+    cronInvalid: "ביטוי Cron חייב להכיל בדיוק 5 שדות.",
+    scheduleRequiresScript: "יש לבחור תבנית או להשתמש בסקריפט ידני כדי לתזמן.",
+    scheduleCreated: "התזמון נוצר בהצלחה!",
     scriptSource: "שיטת הגדרת הסקריפט",
     manualScript: "כתיבת סקריפט ידנית",
     existingScript: "שימוש ב-ConfigMap קיים",
@@ -584,14 +608,15 @@ const translations = {
     createPalette: "צור פלטה",
     deletePaletteTitle: "מחק פלטה מותאמת אישית",
     deletePaletteConfirm: "האם אתה בטוח שברצונך למחוק את הפלטה המותאמת אישית \"{name}\"?",
+    ...supplementalStrings.he,
   },
   zh: {
     dashboard: "仪表板",
     reports: "报告",
     k8sClusters: "K8s 集群",
-    crdControl: "K6 算子 CRD",
+    crdControl: "K6s TestRun CRDs",
     influxdb: "InfluxDB 分析",
-    schedules: "计划任务",
+    schedules: "CronJob / Job",
     settings: "设置",
     logout: "登出",
     connected: "已连接",
@@ -599,7 +624,7 @@ const translations = {
     secureSession: "安全 TLS 1.3 会话",
     syncTime: "上次同步",
     addCluster: "添加集群",
-    welcome: "欢迎使用 K6 Stratum Portal",
+    welcome: "欢迎使用 K6 Stratos",
     subWelcome: "Kubernetes 与性能观测门户",
     username: "用户名",
     password: "密码",
@@ -654,6 +679,13 @@ const translations = {
     jsFile: "JS 脚本文件",
     cpuLimit: "CPU 限制",
     memLimit: "内存限制",
+    scheduleTest: "计划此测试",
+    cronExpression: "Cron 表达式",
+    cronExample: "示例：*/5 * * * *",
+    cronRequired: "计划测试需要填写 Cron 表达式。",
+    cronInvalid: "Cron 表达式必须正好包含 5 个字段。",
+    scheduleRequiresScript: "请先选择模板或使用手动脚本以便计划运行。",
+    scheduleCreated: "计划创建成功！",
     scriptSource: "脚本配置方式",
     manualScript: "手动编写脚本",
     existingScript: "使用现有 ConfigMap",
@@ -694,7 +726,7 @@ const translations = {
     registeredK8sClusters: "您的 Kubernetes 集群",
     operatorStatus: "算子组件状态",
     recommendations: "使用帮助与建议",
-    recDesc: "使用 K6 Operator CRDs 菜单调度和监视负载测试。汇总的性能指标会自动写入 InfluxDB，并可在 InfluxDB 分析面板中查看。",
+    recDesc: "使用 K6s TestRun CRDs 菜单调度和监视负载测试。汇总的性能指标会自动写入 InfluxDB，并可在 InfluxDB 分析面板中查看。",
     metricsTitle: "InfluxDB 数据分析",
     metricsSub: "可视化历史测试运行，跟踪 HTTP 请求速率和活跃用户数。",
     metricRateToggle: "请求延迟 (http_req_duration)",
@@ -766,6 +798,7 @@ const translations = {
     createPalette: "创建调色板",
     deletePaletteTitle: "删除自定义调色板",
     deletePaletteConfirm: "确定要删除自定义调色板 \"{name}\" 吗？",
+    ...supplementalStrings.zh,
   }
 };
 export const defaultPalettes: CustomPalette[] = [
@@ -992,9 +1025,15 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     }
   }, [colorPalette, customPalettes, theme]);
 
-  const t = (key: string): string => {
+  const t = (key: string, params?: Record<string, string | number>): string => {
     const dict = translations[lang] || translations['en'];
-    return (dict as any)[key] || key;
+    let text = (dict as Record<string, string>)[key] || key;
+    if (params) {
+      Object.entries(params).forEach(([paramKey, value]) => {
+        text = text.replace(new RegExp(`\\{${paramKey}\\}`, 'g'), String(value));
+      });
+    }
+    return text;
   };
 
   return (

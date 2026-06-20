@@ -51,9 +51,9 @@ export default function ClustersPage() {
       </div>
 
       {loading ? (
-        <div className="py-12 text-center text-slate-500">Loading...</div>
+        <div className="py-12 text-center text-slate-500">{t('loading')}</div>
       ) : clusters.length === 0 ? (
-        <div className="py-12 text-center text-slate-500">No clusters defined.</div>
+        <div className="py-12 text-center text-slate-500">{t('noClustersDefined')}</div>
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
           {clusters.map((cluster) => (
@@ -69,13 +69,13 @@ export default function ClustersPage() {
                     <div className="flex items-center space-x-2">
                       <h3 className="text-lg font-bold text-slate-200">{cluster.name}</h3>
                       {cluster.k6_operator_installed ? (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/15 text-purple-300 border border-purple-500/30" title="K6 Operator Installed">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/15 text-purple-300 border border-purple-500/30" title={t('operatorInstalled')}>
                           <span className="w-1.5 h-1.5 mr-1 rounded-full bg-purple-400"></span>
-                          k6 Operator
+                          {t('k6OperatorLabel')}
                         </span>
                       ) : (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800/80 text-slate-400 border border-slate-700/50" title="K6 Operator Not Installed">
-                          No Operator
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800/80 text-slate-400 border border-slate-700/50" title={t('operatorNotInstalled')}>
+                          {t('noOperator')}
                         </span>
                       )}
                     </div>

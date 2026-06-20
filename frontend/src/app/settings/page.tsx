@@ -17,11 +17,12 @@ import {
   Users,
   Key
 } from 'lucide-react';
-import { api, ClusterConfig, InfluxServerConfig, K6Template, User, SSOConfig, APIToken } from '@/services/api';
+import { api, ClusterConfig, InfluxServerConfig, K6Template, User, SSOConfig, APIToken, RunDefaults } from '@/services/api';
+import { RUNNER_IMAGE_PLACEHOLDER } from '@/utils/clusterImage';
 import { usePreferences, defaultPalettes, CustomPalette } from '@/components/PreferencesContext';
 
 export default function SettingsPage() {
-  const { t, colorPalette, setColorPalette, customPalettes, addCustomPalette, deleteCustomPalette } = usePreferences();
+  const { t, lang, colorPalette, setColorPalette, customPalettes, addCustomPalette, deleteCustomPalette } = usePreferences();
 
   const [isCustomPaletteModalOpen, setIsCustomPaletteModalOpen] = useState(false);
   const [editingPaletteId, setEditingPaletteId] = useState<string | null>(null);
@@ -142,7 +143,7 @@ export default function SettingsPage() {
       backgroundDark: initialEditPalette.colors.backgroundDark || '#090d16',
       backgroundLight: initialEditPalette.colors.backgroundLight || '#f1f5f9'
     });
-    showToast('Palette colors reset to previous values', 'info');
+    showToast(t('paletteResetSuccess'), 'info');
   };
 
   const handleAddCustomPalette = (e: React.FormEvent) => {
@@ -173,17 +174,17 @@ export default function SettingsPage() {
     setEditingPaletteId(null);
     setInitialEditPalette(null);
     setColorPalette(id);
-    showToast(editingPaletteId ? 'Custom color palette updated successfully!' : 'Custom color palette added successfully!', 'success');
+    showToast(editingPaletteId ? t('paletteUpdatedSuccess') : t('paletteAddedSuccess'), 'success');
   };
 
   const handleDeleteCustomPaletteClick = (e: React.MouseEvent, id: string, name: string) => {
     e.stopPropagation(); // prevent selecting the palette on click
     requestConfirm(
-      t('deletePaletteTitle') || 'Delete Custom Palette',
-      <span>Are you sure you want to delete the custom palette "<strong className="font-semibold text-slate-200">{name}</strong>"?</span>,
+      t('deletePaletteTitle'),
+      <span>{t('deletePaletteConfirm', { name })}</span>,
       () => {
         deleteCustomPalette(id);
-        showToast('Custom color palette deleted successfully', 'info');
+        showToast(t('paletteDeletedSuccess'), 'info');
       }
     );
   };
@@ -233,7 +234,8 @@ export default function SettingsPage() {
     api_server_url: '',
     auth_type: 'token',
     raw_secret: '',
-    ca_cert_base64: ''
+    ca_cert_base64: '',
+    aws_account_id: '',
   });
   const [allowedNamespaces, setAllowedNamespaces] = useState<string[]>([]);
   const [customNamespaceInput, setCustomNamespaceInput] = useState('');
@@ -264,7 +266,7 @@ export default function SettingsPage() {
             ...prev,
             raw_secret: current.context_name,
             api_server_url: current.api_server_url,
-            name: prev.name || (current.context_name.split('/').pop() || 'K8s Cluster')
+            name: prev.name || (current.context_name.split('/').pop() || t('defaultK8sCluster'))
           }));
         }
       } else if (contexts.length > 0) {
@@ -273,7 +275,7 @@ export default function SettingsPage() {
           ...prev,
           raw_secret: first.context_name,
           api_server_url: first.api_server_url,
-          name: prev.name || (first.context_name.split('/').pop() || 'K8s Cluster')
+          name: prev.name || (first.context_name.split('/').pop() || t('defaultK8sCluster'))
         }));
       }
     } catch (err) {
@@ -386,13 +388,13 @@ export default function SettingsPage() {
 
       const res = await api.setInfluxConfig(payload);
       if (res && res.warning) {
-        setInfluxSuccess(`Saved, but: ${res.warning}`);
+        setInfluxSuccess(`${t('influxSavedSuccess')} ${res.warning}`);
       } else {
-        setInfluxSuccess('InfluxDB configuration saved successfully.');
+        setInfluxSuccess(t('influxSavedSuccess'));
       }
       await loadUniqueInfluxConfig();
     } catch (err: any) {
-      setInfluxError(err.message || 'Failed to save InfluxDB configuration');
+      setInfluxError(err.message || t('influxSettingsError'));
     } finally {
       setSavingInflux(false);
     }
@@ -400,15 +402,15 @@ export default function SettingsPage() {
 
   const handleDeleteInfluxServer = async (id: string, name: string) => {
     requestConfirm(
-      'Delete InfluxDB Server',
-      <span>Are you sure you want to delete the InfluxDB server "<strong className="font-semibold text-slate-200">{name}</strong>"?</span>,
+      t('deleteInfluxServerTitle'),
+      <span>{t('deleteInfluxServerConfirm', { name })}</span>,
       async () => {
         try {
           await api.deleteInfluxServer(id);
           await loadInfluxServers();
-          showToast(`Successfully deleted InfluxDB server "${name}"`, 'success');
+          showToast(t('influxDeletedSuccess', { name }), 'success');
         } catch (err: any) {
-          showToast(err.message || 'Error deleting InfluxDB server', 'error');
+          showToast(err.message || t('influxDeleteError'), 'error');
         }
       }
     );
@@ -418,9 +420,9 @@ export default function SettingsPage() {
     try {
       await api.activateInfluxServer(id);
       await loadInfluxServers();
-      showToast('Activated InfluxDB server successfully', 'success');
+      showToast(t('influxActivatedSuccess'), 'success');
     } catch (err: any) {
-      showToast(err.message || 'Error activating InfluxDB server', 'error');
+      showToast(err.message || t('influxActivateError'), 'error');
     }
   };
 
@@ -437,9 +439,9 @@ export default function SettingsPage() {
         password: useInfluxAuth ? influxConfig.password : ''
       };
       await api.testInfluxConfig(payload);
-      setInfluxTestSuccess('InfluxDB connection verified successfully!');
+      setInfluxTestSuccess(t('influxTestVerified'));
     } catch (err: any) {
-      setInfluxTestError(err.message || 'Failed to verify InfluxDB connection');
+      setInfluxTestError(err.message || t('influxTestFailed'));
     } finally {
       setTestingInflux(false);
     }
@@ -472,6 +474,7 @@ export default function () {
     parallelism: 1,
     script_name: 'k6-test-script',
     script_file: 'test.js',
+    runner_image: '',
     cpu_limit: '10m',
     mem_limit: '16Mi',
     script_content: DEFAULT_SCRIPT_TEMPLATE
@@ -497,6 +500,7 @@ export default function () {
       parallelism: 1,
       script_name: 'k6-test-script',
       script_file: 'test.js',
+      runner_image: '',
       cpu_limit: '10m',
       mem_limit: '16Mi',
       script_content: DEFAULT_SCRIPT_TEMPLATE
@@ -513,6 +517,7 @@ export default function () {
       parallelism: tmpl.parallelism,
       script_name: tmpl.script_name,
       script_file: tmpl.script_file,
+      runner_image: tmpl.runner_image || '',
       cpu_limit: tmpl.cpu_limit,
       mem_limit: tmpl.mem_limit,
       script_content: tmpl.script_content
@@ -535,7 +540,7 @@ export default function () {
       setIsTemplateModalOpen(false);
       await loadTemplates();
     } catch (err: any) {
-      setTemplateError(err.message || 'Failed to save template');
+      setTemplateError(err.message || t('templateSaveError'));
     } finally {
       setSavingTemplate(false);
     }
@@ -543,15 +548,15 @@ export default function () {
 
   const handleDeleteTemplate = async (id: string, name: string) => {
     requestConfirm(
-      t('deleteTemplateTitle') || 'Delete Template',
-      <span>Are you sure you want to delete the template "<strong className="font-semibold text-slate-200">{name}</strong>"?</span>,
+      t('deleteTemplateTitle'),
+      <span>{t('deleteTemplateConfirm', { name })}</span>,
       async () => {
         try {
           await api.deleteTemplate(id);
           await loadTemplates();
-          showToast(`Successfully deleted template "${name}"`, 'success');
+          showToast(t('templateDeletedSuccess', { name }), 'success');
         } catch (err: any) {
-          showToast(err.message || 'Error deleting template', 'error');
+          showToast(err.message || t('templateDeleteError'), 'error');
         }
       }
     );
@@ -595,6 +600,67 @@ export default function () {
   const [ssoError, setSsoError] = useState('');
   const [savingSSO, setSavingSSO] = useState(false);
 
+  // Run Defaults state
+  const DEFAULT_OUTPUT_ARGS = '--out influxdb=http://grafana-hub-influxdb.grafana-hub.svc.cluster.local:8086/k6s';
+  const [runDefaults, setRunDefaults] = useState<RunDefaults>({
+    output_args: DEFAULT_OUTPUT_ARGS,
+    use_output:  false,
+    use_image:   false,
+    image_url:   '',
+    env_vars:    [],
+  });
+  const [savingDefaults, setSavingDefaults] = useState(false);
+  const [defaultsSuccess, setDefaultsSuccess] = useState(false);
+  const [defaultsError, setDefaultsError] = useState('');
+
+  const loadRunDefaults = async () => {
+    try {
+      const d = await api.getRunDefaults();
+      setRunDefaults({
+        ...d,
+        env_vars: d.env_vars || [],
+      });
+    } catch (err) {
+      console.error('Failed to load run defaults', err);
+    }
+  };
+
+  const handleAddDefaultEnv = () => {
+    setRunDefaults(d => ({ ...d, env_vars: [...d.env_vars, { key: '', value: '' }] }));
+  };
+
+  const handleUpdateDefaultEnv = (index: number, field: 'key' | 'value', value: string) => {
+    setRunDefaults(d => ({
+      ...d,
+      env_vars: d.env_vars.map((entry, idx) => (
+        idx === index ? { ...entry, [field]: value } : entry
+      )),
+    }));
+  };
+
+  const handleRemoveDefaultEnv = (index: number) => {
+    setRunDefaults(d => ({
+      ...d,
+      env_vars: d.env_vars.filter((_, idx) => idx !== index),
+    }));
+  };
+
+  const handleSaveRunDefaults = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setDefaultsError('');
+    setDefaultsSuccess(false);
+    setSavingDefaults(true);
+    try {
+      await api.saveRunDefaults(runDefaults);
+      setDefaultsSuccess(true);
+      setTimeout(() => setDefaultsSuccess(false), 3000);
+    } catch (err: any) {
+      setDefaultsError(err.message || t('defaultsSaveError'));
+    } finally {
+      setSavingDefaults(false);
+    }
+  };
+
   const loadUsers = async () => {
     try {
       setLoadingUsers(true);
@@ -637,7 +703,7 @@ export default function () {
       const config = await api.getInfluxConfig();
       if (config) {
         setInfluxConfig({
-          name: config.name || 'Default InfluxDB',
+          name: config.name || t('defaultInfluxName'),
           version: config.version || 'v2',
           url: config.url || '',
           token: config.token || '',
@@ -675,7 +741,7 @@ export default function () {
       setIsUserModalOpen(false);
       await loadUsers();
     } catch (err: any) {
-      setUserError(err.message || 'Failed to save user');
+      setUserError(err.message || t('userSaveError'));
     } finally {
       setSavingUser(false);
     }
@@ -683,19 +749,19 @@ export default function () {
 
   const handleDeleteUser = async (username: string) => {
     if (username === 'admin') {
-      showToast(t('cannotDeleteAdmin') || 'Cannot delete the main admin account.', 'error');
+      showToast(t('cannotDeleteAdmin'), 'error');
       return;
     }
     requestConfirm(
-      t('deleteUserTitle') || 'Delete User',
-      <span>Are you sure you want to delete the user "<strong className="font-semibold text-slate-200">{username}</strong>"?</span>,
+      t('deleteUserTitle'),
+      <span>{t('deleteUserConfirm', { name: username })}</span>,
       async () => {
         try {
           await api.deleteUser(username);
           await loadUsers();
-          showToast(`Successfully deleted user "${username}"`, 'success');
+          showToast(t('userDeletedSuccess', { name: username }), 'success');
         } catch (err: any) {
-          showToast(err.message || 'Error deleting user', 'error');
+          showToast(err.message || t('userDeleteError'), 'error');
         }
       }
     );
@@ -709,10 +775,10 @@ export default function () {
 
     try {
       await api.saveSSOConfig(ssoConfig);
-      setSsoSuccess('SSO configuration saved successfully.');
+      setSsoSuccess(t('ssoSavedSuccess'));
       await loadSSOConfig();
     } catch (err: any) {
-      setSsoError(err.message || 'Failed to save SSO configuration');
+      setSsoError(err.message || t('ssoSaveError'));
     } finally {
       setSavingSSO(false);
     }
@@ -749,21 +815,21 @@ export default function () {
       setNewTokenExpiry(0);
       await loadAPITokens();
     } catch (err: any) {
-      showToast(err.message || 'Failed to generate API Token', 'error');
+      showToast(err.message || t('tokenGenerateError'), 'error');
     }
   };
 
   const handleDeleteAPIToken = async (tokenHash: string, name: string) => {
     requestConfirm(
-      t('deleteTokenTitle') || 'Delete API Token',
-      <span>Are you sure you want to delete the API Token "<strong className="font-semibold text-slate-200">{name}</strong>"?</span>,
+      t('deleteTokenTitle'),
+      <span>{t('deleteTokenConfirm', { name })}</span>,
       async () => {
         try {
           await api.deleteAPIToken(tokenHash);
           await loadAPITokens();
-          showToast(`Successfully deleted API Token "${name}"`, 'success');
+          showToast(t('tokenDeletedSuccess', { name }), 'success');
         } catch (err: any) {
-          showToast(err.message || 'Error deleting API Token', 'error');
+          showToast(err.message || t('tokenDeleteError'), 'error');
         }
       }
     );
@@ -781,6 +847,7 @@ export default function () {
       await loadUsers();
       await loadSSOConfig();
       await loadAPITokens();
+      await loadRunDefaults();
     } catch (err) {
       console.error('Failed to load settings data', err);
     } finally {
@@ -802,7 +869,8 @@ export default function () {
       api_server_url: c.api_server_url,
       auth_type: c.auth_type,
       raw_secret: '', // leave empty if not updating the secret
-      ca_cert_base64: c.ca_cert_base64 || ''
+      ca_cert_base64: c.ca_cert_base64 || '',
+      aws_account_id: c.aws_account_id || '',
     });
     const initialNamespaces = c.namespaces ? c.namespaces.split(',').map(s => s.trim()).filter(Boolean) : [];
     setAllowedNamespaces(initialNamespaces);
@@ -833,7 +901,8 @@ export default function () {
       api_server_url: '',
       auth_type: 'token',
       raw_secret: '',
-      ca_cert_base64: ''
+      ca_cert_base64: '',
+      aws_account_id: '',
     });
     setAllowedNamespaces([]);
     setDiscoveredNamespaces([]);
@@ -846,7 +915,7 @@ export default function () {
 
     // Require raw_secret if registering a new cluster (except for in-cluster type)
     if (!isEditing && newCluster.auth_type !== 'in-cluster' && !newCluster.raw_secret) {
-      setRegError('Authentication credentials or context selection are required.');
+      setRegError(t('authCredentialsRequired'));
       return;
     }
 
@@ -873,7 +942,8 @@ export default function () {
         api_server_url: '',
         auth_type: 'token',
         raw_secret: '',
-        ca_cert_base64: ''
+        ca_cert_base64: '',
+        aws_account_id: '',
       });
       setAllowedNamespaces([]);
       const clusterList = await api.getClusters();
@@ -897,13 +967,13 @@ export default function () {
     if (!deletingCluster) return;
     try {
       await api.deleteCluster(deletingCluster.id);
-      showToast(`Successfully deleted cluster "${deletingCluster.name}"`, 'success');
+      showToast(t('clusterDeletedSuccess', { name: deletingCluster.name }), 'success');
       setDeletingCluster(null);
       setConfirmClusterName('');
       const clusterList = await api.getClusters();
       setClusters(clusterList || []);
     } catch (err: any) {
-      showToast(err.message || 'Error deleting cluster', 'error');
+      showToast(err.message || t('clusterDeleteError'), 'error');
     }
   };
 
@@ -926,7 +996,7 @@ export default function () {
   if (isAdmin === null) {
     return (
       <div className="min-h-[50vh] flex items-center justify-center text-slate-500">
-        Verification...
+        {t('verification')}
       </div>
     );
   }
@@ -963,9 +1033,9 @@ export default function () {
           </div>
 
           {loadingClusters ? (
-            <div className="py-12 text-center text-slate-500 text-xs">Loading...</div>
+            <div className="py-12 text-center text-slate-500 text-xs">{t('loading')}</div>
           ) : clusters.length === 0 ? (
-            <div className="py-12 text-center text-slate-500 text-xs">No clusters defined.</div>
+            <div className="py-12 text-center text-slate-500 text-xs">{t('noClustersDefined')}</div>
           ) : (
             <div className="space-y-3">
               {clusters.map((c) => (
@@ -993,14 +1063,14 @@ export default function () {
                   <div className="flex space-x-1 shrink-0">
                     <button
                       onClick={() => handleStartEdit(c)}
-                      title="Edit Cluster"
+                      title={t('editCluster')}
                       className="p-2 border border-transparent hover:border-purple-500/25 hover:bg-purple-500/10 text-slate-500 hover:text-purple-400 rounded-xl transition cursor-pointer"
                     >
                       <Edit className="w-4 h-4" />
                     </button>
                     <button
                       onClick={() => handleDeleteCluster(c.id, c.name)}
-                      title="Delete Cluster"
+                      title={t('deleteCluster')}
                       className="p-2 border border-transparent hover:border-red-500/25 hover:bg-red-500/10 text-slate-500 hover:text-red-400 rounded-xl transition cursor-pointer"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -1021,7 +1091,7 @@ export default function () {
             </h3>
             {influxEnvDefined && (
               <span className="px-2 py-0.5 bg-purple-500/10 text-purple-400 border border-purple-500/20 rounded-md text-[10px] font-bold uppercase tracking-wider">
-                Configured via Env
+                {t('configuredViaEnv')}
               </span>
             )}
           </div>
@@ -1050,7 +1120,7 @@ export default function () {
           <form onSubmit={handleSaveInfluxServer} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="md:col-span-2">
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">URL</label>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('url')}</label>
                 <input
                   type="url"
                   required
@@ -1062,7 +1132,7 @@ export default function () {
                 />
               </div>
               <div>
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Version</label>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('version')}</label>
                 <select
                   disabled={influxEnvDefined}
                   value={influxConfig.version}
@@ -1078,7 +1148,7 @@ export default function () {
             {influxConfig.version === 'v2' ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-fadeIn">
                 <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Organization</label>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('org')}</label>
                   <input
                     type="text"
                     required
@@ -1090,7 +1160,7 @@ export default function () {
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Bucket</label>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('bucket')}</label>
                   <input
                     type="text"
                     required
@@ -1105,7 +1175,7 @@ export default function () {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-fadeIn">
                 <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Database (Bucket)</label>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('databaseBucket')}</label>
                   <input
                     type="text"
                     required
@@ -1117,15 +1187,15 @@ export default function () {
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">HTTP Query Method</label>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('httpQueryMethod')}</label>
                   <select
                     disabled={influxEnvDefined}
                     value={influxConfig.method}
                     onChange={(e) => setInfluxConfig({ ...influxConfig, method: e.target.value })}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-slate-200 focus:border-purple-500 outline-none disabled:opacity-55 disabled:cursor-not-allowed"
                   >
-                    <option value="POST">POST (Recommended)</option>
-                    <option value="GET">GET</option>
+                    <option value="POST">{t('postRecommended')}</option>
+                    <option value="GET">{t('getMethod')}</option>
                   </select>
                 </div>
               </div>
@@ -1133,7 +1203,7 @@ export default function () {
 
             {influxConfig.version === 'v2' ? (
               <div className="animate-fadeIn">
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">API Authentication Token</label>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('apiAuthToken')}</label>
                 <input
                   type="password"
                   required
@@ -1156,14 +1226,14 @@ export default function () {
                     className="w-4 h-4 rounded border-slate-800 text-purple-600 bg-slate-950 focus:ring-purple-500 cursor-pointer disabled:opacity-55 disabled:cursor-not-allowed"
                   />
                   <label htmlFor="useInfluxAuthCheck" className="text-xs font-semibold text-slate-400 cursor-pointer select-none">
-                    Use Basic Authentication
+                    {t('useBasicAuth')}
                   </label>
                 </div>
 
                 {useInfluxAuth && (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-fadeIn">
                     <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Username</label>
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('username')}</label>
                       <input
                         type="text"
                         required
@@ -1175,7 +1245,7 @@ export default function () {
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Password</label>
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('password')}</label>
                       <input
                         type="password"
                         required
@@ -1199,14 +1269,14 @@ export default function () {
                   disabled={testingInflux}
                   className="py-2.5 bg-slate-850 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-xl text-xs font-semibold shadow-md cursor-pointer transition disabled:opacity-50"
                 >
-                  {testingInflux ? 'Testing...' : 'Test Connection'}
+                  {testingInflux ? t('testing') : t('testConn')}
                 </button>
                 <button
                   type="submit"
                   disabled={savingInflux}
                   className="py-2.5 bg-gradient-to-r from-purple-600 to-pink-500 text-white rounded-xl text-xs font-semibold shadow-md cursor-pointer transition hover:scale-102 active:scale-98 disabled:opacity-50"
                 >
-                  {savingInflux ? 'Saving...' : 'Save Configuration'}
+                  {savingInflux ? t('saving') : t('saveConfiguration')}
                 </button>
               </div>
             )}
@@ -1215,26 +1285,170 @@ export default function () {
 
       </div>
 
+
+      {/* Run Defaults Section */}
+      <div className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-6 backdrop-blur-md space-y-6 animate-fadeIn">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-bold text-white flex items-center gap-2">
+            <Settings className="w-5 h-5 text-purple-400" />
+            <span>{t('runDefaults')}</span>
+          </h3>
+          <span className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">{t('runDefaultsSub')}</span>
+        </div>
+
+        <p className="text-xs text-slate-400">
+          {t('runDefaultsDesc')}
+        </p>
+
+        <form onSubmit={handleSaveRunDefaults} className="space-y-5">
+          {/* Output Option */}
+          <div className="p-4 bg-slate-950/40 border border-slate-800/60 rounded-2xl space-y-3">
+            <label className="flex items-center gap-3 cursor-pointer select-none">
+              <div
+                onClick={() => setRunDefaults(d => ({ ...d, use_output: !d.use_output }))}
+                className={`w-10 h-5 rounded-full relative transition-colors cursor-pointer flex-shrink-0 ${runDefaults.use_output ? 'bg-gradient-to-r from-purple-600 to-pink-500' : 'bg-slate-700'}`}
+              >
+                <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${runDefaults.use_output ? 'translate-x-5' : 'translate-x-0.5'}`} />
+              </div>
+              <span className="text-sm font-semibold text-slate-200">{t('addOutputByDefault')}</span>
+            </label>
+            <p className="text-xs text-slate-500 pl-13">
+              {t('addOutputByDefaultDesc')}
+            </p>
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">{t('outputArgument')}</label>
+              <input
+                type="text"
+                value={runDefaults.output_args}
+                onChange={e => setRunDefaults(d => ({ ...d, output_args: e.target.value }))}
+                placeholder="--out influxdb=http://..."
+                className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 font-mono focus:border-purple-500 outline-none"
+              />
+            </div>
+          </div>
+
+          {/* Default Runner Image */}
+          <div className="p-4 bg-slate-950/40 border border-slate-800/60 rounded-2xl space-y-3">
+            <label className="flex items-center gap-3 cursor-pointer select-none">
+              <div
+                onClick={() => setRunDefaults(d => ({ ...d, use_image: !d.use_image }))}
+                className={`w-10 h-5 rounded-full relative transition-colors cursor-pointer flex-shrink-0 ${runDefaults.use_image ? 'bg-gradient-to-r from-purple-600 to-pink-500' : 'bg-slate-700'}`}
+              >
+                <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${runDefaults.use_image ? 'translate-x-5' : 'translate-x-0.5'}`} />
+              </div>
+              <span className="text-sm font-semibold text-slate-200">{t('useCustomImageByDefault')}</span>
+            </label>
+            <p className="text-xs text-slate-500">
+              {t('useCustomImageByDefaultDesc')}
+            </p>
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">{t('runnerImagePath')}</label>
+              <input
+                type="text"
+                value={runDefaults.image_url}
+                onChange={e => setRunDefaults(d => ({ ...d, image_url: e.target.value }))}
+                placeholder={RUNNER_IMAGE_PLACEHOLDER}
+                className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 font-mono focus:border-purple-500 outline-none"
+              />
+              <p className="text-[10px] text-slate-600 mt-1">
+                {t('runDefaultsImageHint')}
+              </p>
+            </div>
+          </div>
+
+          {/* Default Environment Variables */}
+          <div className="p-4 bg-slate-950/40 border border-slate-800/60 rounded-2xl space-y-3">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold text-slate-200">{t('runDefaultsEnv')}</p>
+                <p className="text-xs text-slate-500">{t('runDefaultsEnvDesc')}</p>
+              </div>
+              <button
+                type="button"
+                onClick={handleAddDefaultEnv}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-850 border border-slate-800 text-slate-300 rounded-xl text-xs font-semibold shadow-md cursor-pointer transition hover:scale-102 active:scale-98"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>{t('runDefaultsEnvAdd')}</span>
+              </button>
+            </div>
+
+            {runDefaults.env_vars.length > 0 && (
+              <div className="space-y-2">
+                {runDefaults.env_vars.map((entry, index) => (
+                  <div key={`default-env-${index}`} className="flex flex-col md:flex-row gap-2">
+                    <input
+                      type="text"
+                      value={entry.key}
+                      onChange={(e) => handleUpdateDefaultEnv(index, 'key', e.target.value)}
+                      placeholder={t('runDefaultsEnvKeyPlaceholder')}
+                      className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 font-mono focus:border-purple-500 outline-none"
+                    />
+                    <div className="flex-1 flex gap-2">
+                      <input
+                        type="text"
+                        value={entry.value}
+                        onChange={(e) => handleUpdateDefaultEnv(index, 'value', e.target.value)}
+                        placeholder={t('runDefaultsEnvValuePlaceholder')}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 font-mono focus:border-purple-500 outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveDefaultEnv(index)}
+                        className="px-2.5 py-2 bg-slate-900 border border-slate-800 text-slate-400 rounded-xl hover:text-rose-400 hover:border-rose-500/30 transition"
+                        aria-label={t('delete')}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {defaultsError && (
+            <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-xs">{defaultsError}</div>
+          )}
+          {defaultsSuccess && (
+            <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-400 text-xs flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+              {t('runDefaultsSavedSuccess')}
+            </div>
+          )}
+
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={savingDefaults}
+              className="px-5 py-2.5 bg-gradient-to-r from-purple-600 to-pink-500 text-white rounded-xl text-xs font-semibold shadow-lg cursor-pointer disabled:opacity-50 hover:scale-102 active:scale-98 transition"
+            >
+              {savingDefaults ? t('saving') : t('saveDefaults')}
+            </button>
+          </div>
+        </form>
+      </div>
+
       {/* K6 Run Templates Section */}
       <div className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-6 backdrop-blur-md space-y-6 animate-fadeIn">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-bold text-white flex items-center gap-2">
             <FileCode2 className="w-5 h-5 text-purple-400" />
-            <span>K6 Run Templates</span>
+            <span>{t('k6RunTemplates')}</span>
           </h3>
           <button
             onClick={handleStartAddTemplate}
             className="flex items-center space-x-1.5 px-3 py-1.5 bg-gradient-to-r from-purple-600 to-pink-500 text-white rounded-xl text-xs font-semibold shadow-md cursor-pointer hover:scale-102 active:scale-98 transition"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>Add Template</span>
+            <span>{t('addTemplate')}</span>
           </button>
         </div>
 
         {loadingTemplates ? (
-          <div className="py-12 text-center text-slate-500 text-xs">Loading templates...</div>
+          <div className="py-12 text-center text-slate-500 text-xs">{t('loading')}</div>
         ) : templates.length === 0 ? (
-          <div className="py-12 text-center text-slate-500 text-xs">No K6 templates defined. Add one to customize your run configurations.</div>
+          <div className="py-12 text-center text-slate-500 text-xs">{t('none')}</div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {templates.map((tmpl) => (
@@ -1250,20 +1464,23 @@ export default function () {
                     <div className="min-w-0">
                       <p className="text-xs font-semibold text-slate-200 truncate">{tmpl.name}</p>
                       <p className="text-[10px] text-slate-500 font-mono truncate">{tmpl.script_name} ({tmpl.script_file})</p>
+                      {tmpl.runner_image && (
+                        <p className="text-[10px] text-slate-500 font-mono truncate">{t('runnerImage')}: {tmpl.runner_image}</p>
+                      )}
                     </div>
                   </div>
 
                   <div className="flex space-x-1 shrink-0">
                     <button
                       onClick={() => handleStartEditTemplate(tmpl)}
-                      title="Edit Template"
+                      title={t('editTemplate')}
                       className="p-2 border border-transparent hover:border-purple-500/25 hover:bg-purple-500/10 text-slate-500 hover:text-purple-400 rounded-xl transition cursor-pointer"
                     >
                       <Edit className="w-4 h-4" />
                     </button>
                     <button
                       onClick={() => handleDeleteTemplate(tmpl.id, tmpl.name)}
-                      title="Delete Template"
+                      title={t('deleteTemplate')}
                       className="p-2 border border-transparent hover:border-red-500/25 hover:bg-red-500/10 text-slate-500 hover:text-red-400 rounded-xl transition cursor-pointer"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -1273,15 +1490,15 @@ export default function () {
 
                 <div className="grid grid-cols-3 gap-2 text-[10px] bg-slate-950/60 p-3 rounded-xl border border-slate-900 text-slate-400 font-medium">
                   <div>
-                    <span className="text-slate-500 block text-[8px] uppercase tracking-wider">Parallelism</span>
-                    <span className="text-slate-300 font-semibold">{tmpl.parallelism} {tmpl.parallelism > 1 ? 'runners' : 'runner'}</span>
+                    <span className="text-slate-500 block text-[8px] uppercase tracking-wider">{t('parallelism')}</span>
+                    <span className="text-slate-300 font-semibold">{tmpl.parallelism} {t('runners')}</span>
                   </div>
                   <div>
-                    <span className="text-slate-500 block text-[8px] uppercase tracking-wider">CPU Limit</span>
+                    <span className="text-slate-500 block text-[8px] uppercase tracking-wider">{t('cpuLimit')}</span>
                     <span className="text-slate-300 font-semibold">{tmpl.cpu_limit}</span>
                   </div>
                   <div>
-                    <span className="text-slate-500 block text-[8px] uppercase tracking-wider">Memory Limit</span>
+                    <span className="text-slate-500 block text-[8px] uppercase tracking-wider">{t('memoryLimit')}</span>
                     <span className="text-slate-300 font-semibold">{tmpl.mem_limit}</span>
                   </div>
                 </div>
@@ -1299,21 +1516,21 @@ export default function () {
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
               <Users className="w-5 h-5 text-purple-400" />
-              <span>User Management</span>
-            </h3>
-            <button
-              onClick={handleStartAddUser}
-              className="flex items-center space-x-1.5 px-3 py-1.5 bg-gradient-to-r from-purple-600 to-pink-500 text-white rounded-xl text-xs font-semibold shadow-md cursor-pointer hover:scale-102 active:scale-98 transition"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Add User</span>
+              <span>{t('userManagement')}</span>
+          </h3>
+          <button
+            onClick={handleStartAddUser}
+            className="flex items-center space-x-1.5 px-3 py-1.5 bg-gradient-to-r from-purple-600 to-pink-500 text-white rounded-xl text-xs font-semibold shadow-md cursor-pointer hover:scale-102 active:scale-98 transition"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>{t('addUser')}</span>
             </button>
           </div>
 
           {loadingUsers ? (
-            <div className="py-12 text-center text-slate-500 text-xs">Loading users...</div>
+            <div className="py-12 text-center text-slate-500 text-xs">{t('loading')}</div>
           ) : users.length === 0 ? (
-            <div className="py-12 text-center text-slate-500 text-xs">No users defined.</div>
+            <div className="py-12 text-center text-slate-500 text-xs">{t('none')}</div>
           ) : (
             <div className="space-y-3">
               {users.map((usr) => (
@@ -1327,7 +1544,7 @@ export default function () {
                     </div>
                     <div className="min-w-0">
                       <p className="text-xs font-semibold text-slate-200 truncate">{usr.username}</p>
-                      <p className="text-[10px] text-slate-500 font-mono truncate">Role: <strong className="font-semibold capitalize text-purple-400">{usr.role}</strong></p>
+                      <p className="text-[10px] text-slate-500 font-mono truncate">{t('role')}: <strong className="font-semibold capitalize text-purple-400">{usr.role}</strong></p>
                     </div>
                   </div>
 
@@ -1335,7 +1552,7 @@ export default function () {
                     <button
                       onClick={() => handleDeleteUser(usr.username)}
                       disabled={usr.username === 'admin'}
-                      title="Delete User"
+                      title={t('deleteUser')}
                       className="p-2 border border-transparent hover:border-red-500/25 hover:bg-red-500/10 text-slate-500 hover:text-red-400 rounded-xl transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -1352,7 +1569,7 @@ export default function () {
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
               <Key className="w-5 h-5 text-purple-400" />
-              <span>OIDC SSO Setup</span>
+              <span>{t('oidcSsoSetup')}</span>
             </h3>
           </div>
 
@@ -1377,14 +1594,14 @@ export default function () {
                 className="w-4 h-4 rounded border-slate-800 text-purple-600 bg-slate-950 focus:ring-purple-500 cursor-pointer"
               />
               <label htmlFor="enableSSOCheckbox" className="text-xs font-semibold text-slate-300 cursor-pointer select-none">
-                Enable Single Sign-On (SSO / OpenID Connect)
+                {t('oidcAuth')}
               </label>
             </div>
 
             {ssoConfig.enabled && (
               <div className="space-y-4 animate-fadeIn">
                 <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">SSO Provider Name (Display Name)</label>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('ssoUserName')}</label>
                   <input
                     type="text"
                     placeholder="e.g. Okta, Keycloak, Auth0 (default is 'SSO')"
@@ -1395,7 +1612,7 @@ export default function () {
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">OIDC Issuer URL</label>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('oidcIssuerUrl')}</label>
                   <input
                     type="url"
                     required
@@ -1408,7 +1625,7 @@ export default function () {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Client ID</label>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('clientId')}</label>
                     <input
                       type="text"
                       required
@@ -1419,7 +1636,7 @@ export default function () {
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Client Secret</label>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('clientSecret')}</label>
                     <input
                       type="password"
                       required
@@ -1432,7 +1649,7 @@ export default function () {
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Redirect URL (SSO Callback)</label>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('url')}</label>
                   <input
                     type="text"
                     required
@@ -1444,7 +1661,7 @@ export default function () {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Administrator Groups (Local administrator permissions)</label>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('administrator')} ({t('roleAuthorization')})</label>
                     <input
                       type="text"
                       placeholder="group-devops-admin, infra-ext-users"
@@ -1454,7 +1671,7 @@ export default function () {
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Editor Groups (Local editor permissions)</label>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('editor')} ({t('roleAuthorization')})</label>
                     <input
                       type="text"
                       placeholder="group-editor-users, technical-users"
@@ -1473,7 +1690,7 @@ export default function () {
                 disabled={savingSSO}
                 className="w-full py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white rounded-xl text-xs font-semibold shadow-lg transition cursor-pointer disabled:opacity-50"
               >
-                {savingSSO ? 'Saving SSO Settings...' : 'Save SSO Settings'}
+                {savingSSO ? t('savingSsoSettings') : t('saveSsoSettings')}
               </button>
             </div>
           </form>
@@ -1485,17 +1702,17 @@ export default function () {
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-bold text-white flex items-center gap-2">
             <Key className="w-5 h-5 text-purple-400" />
-            <span>{t('apiTokens') || "API Tokens"}</span>
+            <span>{t('apiTokens')}</span>
           </h3>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Token Generation Form */}
           <div className="bg-slate-950/40 border border-slate-800/60 rounded-2xl p-5 space-y-4 lg:col-span-1">
-            <h4 className="text-sm font-semibold text-white">{t('generateToken') || "Generate Token"}</h4>
+            <h4 className="text-sm font-semibold text-white">{t('generateToken')}</h4>
             <form onSubmit={handleGenerateAPIToken} className="space-y-4">
               <div>
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('tokenName') || "Token Name"}</label>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('tokenName')}</label>
                 <input
                   type="text"
                   required
@@ -1508,28 +1725,28 @@ export default function () {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('role') || "Role"}</label>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('role')}</label>
                   <select
                     value={newTokenRole}
                     onChange={(e) => setNewTokenRole(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-slate-200 focus:border-purple-500 outline-none font-sans"
                   >
-                    <option value="viewer">Viewer</option>
-                    <option value="editor">Editor</option>
-                    <option value="administrator">Administrator</option>
+                    <option value="viewer">{t('viewer')}</option>
+                    <option value="editor">{t('editor')}</option>
+                    <option value="administrator">{t('administrator')}</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('expiry') || "Expiration"}</label>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">{t('expiry')}</label>
                   <select
                     value={newTokenExpiry}
                     onChange={(e) => setNewTokenExpiry(Number(e.target.value))}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-slate-200 focus:border-purple-500 outline-none font-sans"
                   >
-                    <option value={0}>{t('never') || "Never"}</option>
-                    <option value={7}>{t('days7') || "7 Days"}</option>
-                    <option value={30}>{t('days30') || "30 Days"}</option>
-                    <option value={90}>{t('days90') || "90 Days"}</option>
+                    <option value={0}>{t('never')}</option>
+                    <option value={7}>{t('days7')}</option>
+                    <option value={30}>{t('days30')}</option>
+                    <option value={90}>{t('days90')}</option>
                   </select>
                 </div>
               </div>
@@ -1538,7 +1755,7 @@ export default function () {
                 type="submit"
                 className="w-full py-2.5 bg-gradient-to-r from-purple-600 to-pink-500 text-white rounded-xl text-xs font-semibold shadow-md hover:scale-102 active:scale-98 transition cursor-pointer"
               >
-                {t('create') || "Create"}
+                {t('create')}
               </button>
             </form>
           </div>
@@ -1546,9 +1763,9 @@ export default function () {
           {/* Tokens List */}
           <div className="lg:col-span-2 space-y-3">
             {loadingTokens ? (
-              <div className="py-12 text-center text-slate-500 text-xs">Loading tokens...</div>
+              <div className="py-12 text-center text-slate-500 text-xs">{t('loading')}</div>
             ) : apiTokens.length === 0 ? (
-              <div className="py-12 text-center text-slate-500 text-xs">No API tokens defined.</div>
+              <div className="py-12 text-center text-slate-500 text-xs">{t('none')}</div>
             ) : (
               <div className="space-y-3 max-h-[350px] overflow-y-auto pr-2">
                 {apiTokens.map((tok) => {
@@ -1570,14 +1787,14 @@ export default function () {
                             </span>
                           </div>
                           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-[9px] text-slate-500 font-mono">
-                            <span>{t('createdAt') || "Created At"}: {new Date(tok.created_at).toLocaleDateString()}</span>
+                            <span>{t('createdAt')}: {new Date(tok.created_at).toLocaleDateString(lang)}</span>
                             <span>
-                              {t('expiresAt') || "Expires At"}: {tok.expires_at ? (
+                              {t('expiresAt')}: {tok.expires_at ? (
                                 <span className={isExpired ? "text-red-400 font-semibold" : "text-slate-400 font-semibold"}>
-                                  {new Date(tok.expires_at).toLocaleDateString()} {isExpired && "(Expired)"}
+                                  {new Date(tok.expires_at).toLocaleDateString(lang)} {isExpired && `(${t('inactive')})`}
                                 </span>
                               ) : (
-                                <span className="text-slate-400 font-semibold">{t('never') || "Never"}</span>
+                                <span className="text-slate-400 font-semibold">{t('never')}</span>
                               )}
                             </span>
                           </div>
@@ -1587,7 +1804,7 @@ export default function () {
                       <div className="flex space-x-1 shrink-0">
                         <button
                           onClick={() => handleDeleteAPIToken(tok.token_hash, tok.name)}
-                          title="Delete API Token"
+                          title={t('deleteApiToken')}
                           className="p-2 border border-transparent hover:border-red-500/25 hover:bg-red-500/10 text-slate-500 hover:text-red-400 rounded-xl transition cursor-pointer"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -1608,11 +1825,11 @@ export default function () {
           <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-md p-6 shadow-2xl relative space-y-4">
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
               <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-              <span>Token Generated Successfully</span>
+              <span>{t('tokenGeneratedSuccess')}</span>
             </h3>
             
             <p className="text-slate-300 text-xs">
-              {t('tokenNotice') || "Save this token now! It will not be shown again."}
+              {t('tokenNotice')}
             </p>
 
             <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 font-mono text-xs break-all text-purple-400 select-all relative flex items-center justify-between gap-4">
@@ -1627,7 +1844,7 @@ export default function () {
                 }}
                 className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-[10px] font-semibold shrink-0 cursor-pointer transition active:scale-95"
               >
-                {copiedToken ? (t('copied') || "Copied!") : (t('copy') || "Copy")}
+                {copiedToken ? t('copied') : t('copy')}
               </button>
             </div>
 
@@ -1639,7 +1856,7 @@ export default function () {
                 }}
                 className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer transition"
               >
-                Close
+                {t('cancel')}
               </button>
             </div>
           </div>
@@ -1658,11 +1875,11 @@ export default function () {
             </button>
 
             <h3 className="text-2xl font-bold text-white mb-2">
-              {isEditing ? 'Edit K8s Cluster' : t('addCluster')}
+              {isEditing ? t('editK8sCluster') : t('addCluster')}
             </h3>
             <p className="text-slate-400 text-xs mb-6">
               {isEditing 
-                ? 'Update settings and namespace permissions for this K8s cluster.' 
+                ? t('updateClusterDesc')
                 : t('addClusterDesc')}
             </p>
 
@@ -1699,6 +1916,20 @@ export default function () {
                 </div>
               )}
 
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('awsAccountId')}</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  placeholder={t('awsAccountIdPlaceholder')}
+                  value={newCluster.aws_account_id}
+                  onChange={(e) => setNewCluster({ ...newCluster, aws_account_id: e.target.value.replace(/\D/g, '') })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:border-purple-500 outline-none font-mono"
+                />
+                <p className="text-[10px] text-slate-600 mt-1">{t('awsAccountIdDesc')}</p>
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className={newCluster.auth_type === 'local' || newCluster.auth_type === 'in-cluster' ? "col-span-2" : ""}>
                   <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('authType')}</label>
@@ -1707,10 +1938,10 @@ export default function () {
                     onChange={(e) => setNewCluster({ ...newCluster, auth_type: e.target.value, raw_secret: '' })}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-200 focus:border-purple-500 outline-none"
                   >
-                    <option value="in-cluster">In-Cluster ServiceAccount (Default)</option>
-                    <option value="token">Service Account Token</option>
-                    <option value="kubeconfig">Kubeconfig (YAML)</option>
-                    <option value="local">Local Kubeconfig (Context)</option>
+                    <option value="in-cluster">{t('authInClusterSA')}</option>
+                    <option value="token">{t('authServiceAccountToken')}</option>
+                    <option value="kubeconfig">{t('authKubeconfigYaml')}</option>
+                    <option value="local">{t('authLocalKubeconfig')}</option>
                   </select>
                 </div>
                 {newCluster.auth_type !== 'local' && newCluster.auth_type !== 'in-cluster' && (
@@ -1730,19 +1961,19 @@ export default function () {
               {newCluster.auth_type === 'in-cluster' ? (
                 <div className="p-3.5 bg-purple-500/5 border border-purple-500/10 rounded-2xl">
                   <p className="text-xs text-purple-300 font-medium">
-                    In-Cluster authentication uses the pod's service account credentials automatically. No extra tokens or endpoint URLs are required.
+                    {t('authInClusterSA')}
                   </p>
                 </div>
               ) : newCluster.auth_type === 'local' ? (
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Local Kubeconfig Context</label>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('localKubeconfigContext')}</label>
                   {loadingContexts ? (
                     <div className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-500">
-                      Loading contexts...
+                      {t('loading')}
                     </div>
                   ) : localContexts.length === 0 ? (
                     <div className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-red-400">
-                      No contexts found in ~/.kube/.config or ~/.kube/config
+                      {t('connectionFailed')}
                     </div>
                   ) : (
                     <select
@@ -1754,15 +1985,15 @@ export default function () {
                           ...newCluster,
                           raw_secret: ctxName,
                           api_server_url: matched ? matched.api_server_url : newCluster.api_server_url,
-                          name: newCluster.name || (ctxName.split('/').pop() || 'K8s Cluster')
+                          name: newCluster.name || (ctxName.split('/').pop() || t('defaultK8sCluster'))
                         });
                       }}
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-200 focus:border-purple-500 outline-none"
                     >
-                      <option value="">-- Select Kube Context --</option>
+                      <option value="">{t('localKubeconfigContext')}</option>
                       {localContexts.map((ctx) => (
                         <option key={ctx.context_name} value={ctx.context_name}>
-                          {ctx.context_name} {ctx.is_current ? ' (Active)' : ''}
+                          {ctx.context_name} {ctx.is_current ? ` (${t('active')})` : ''}
                         </option>
                       ))}
                     </select>
@@ -1772,14 +2003,13 @@ export default function () {
                 <div>
                   <label className="block text-xs font-semibold text-slate-400 mb-1.5">
                     {newCluster.auth_type === 'token' ? t('secretToken') : t('kubeconfigYaml')}
-                    {isEditing && <span className="text-slate-500 ml-1.5">(Optional)</span>}
                   </label>
                   <textarea
                     required={!isEditing}
                     rows={4}
                     placeholder={
                       isEditing
-                        ? 'Leave blank to keep existing cluster credentials'
+                        ? t('leaveBlankCredentials')
                         : newCluster.auth_type === 'token'
                         ? 'eyJhbGciOiJSUzI1NiIsImt...'
                         : 'apiVersion: v1\nclusters:\n...'
@@ -1794,16 +2024,16 @@ export default function () {
               {/* Allowed Namespaces Whitelist */}
               <div className="space-y-2">
                 <label className="block text-xs font-semibold text-slate-400">
-                  Allowed Namespaces
+                  {t('namespaceLabel')}
                 </label>
                 <div className="bg-slate-950/60 border border-slate-800/80 rounded-2xl p-4 space-y-3">
                   <p className="text-[10px] text-slate-500 leading-relaxed">
-                    Limit the namespaces available for load testing. If no namespaces are checked or added, all discovered namespaces on the cluster will be available.
+                    {t('allNamespaces')}
                   </p>
                   
                   {/* Common namespace presets and added namespaces */}
                   {loadingNamespaces ? (
-                    <div className="text-xs text-slate-500 animate-pulse py-1">Loading namespaces from cluster...</div>
+                    <div className="text-xs text-slate-500 animate-pulse py-1">{t('loading')}</div>
                   ) : (
                     <div className="flex flex-wrap gap-2">
                       {discoveredNamespaces.map((ns) => {
@@ -1857,12 +2087,12 @@ export default function () {
                       
                       {!isEditing && allowedNamespaces.length === 0 && (
                         <div className="text-[11px] text-slate-500 py-1">
-                          No namespaces loaded. Add one manually below.
+                          {t('none')}
                         </div>
                       )}
                       {isEditing && discoveredNamespaces.length === 0 && (
                         <div className="text-[11px] text-purple-400/90 py-1">
-                          No namespaces found with label <span className="font-mono bg-purple-500/5 px-1 py-0.5 rounded border border-purple-500/10">k6s=enabled</span>.
+                          {t('none')}
                         </div>
                       )}
                     </div>
@@ -1872,7 +2102,7 @@ export default function () {
                   <div className="flex gap-2">
                     <input
                       type="text"
-                      placeholder="Add custom namespace..."
+                      placeholder={t('addCustomNamespace')}
                       value={customNamespaceInput}
                       onChange={(e) => setCustomNamespaceInput(e.target.value)}
                       onKeyDown={(e) => {
@@ -1898,7 +2128,7 @@ export default function () {
                       }}
                       className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer border border-slate-700/50 transition active:scale-95"
                     >
-                      Add
+                      {t('create')}
                     </button>
                   </div>
                 </div>
@@ -1939,11 +2169,8 @@ export default function () {
             </button>
 
             <h3 className="text-2xl font-bold text-white mb-2">
-              {isEditingTemplate ? 'Edit K6 Run Template' : 'Add K6 Run Template'}
+              {isEditingTemplate ? t('editK6Template') : t('addK6RunTemplate')}
             </h3>
-            <p className="text-slate-400 text-xs mb-6">
-              Configure template run specifications for K6 Operator loads.
-            </p>
 
             {templateError && (
               <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-xs">
@@ -1953,7 +2180,7 @@ export default function () {
 
             <form onSubmit={handleSaveTemplateConfig} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1.5">Template Name</label>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('templateName')}</label>
                 <input
                   type="text"
                   required
@@ -1966,7 +2193,7 @@ export default function () {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Parallelism (Runners)</label>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('parallelism')}</label>
                   <input
                     type="number"
                     min={1}
@@ -1978,7 +2205,7 @@ export default function () {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Script ConfigMap Name</label>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('scriptConfigMapName')}</label>
                   <input
                     type="text"
                     required
@@ -1992,7 +2219,7 @@ export default function () {
 
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">JS Filename</label>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('jsFilename')}</label>
                   <input
                     type="text"
                     required
@@ -2003,7 +2230,7 @@ export default function () {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">CPU Limit</label>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('cpuLimit')}</label>
                   <input
                     type="text"
                     required
@@ -2014,7 +2241,7 @@ export default function () {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Memory Limit</label>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('memoryLimit')}</label>
                   <input
                     type="text"
                     required
@@ -2027,7 +2254,18 @@ export default function () {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1.5">JS Script Content</label>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('runnerImage')}</label>
+                <input
+                  type="text"
+                  placeholder="123456789012.dkr.ecr.us-west-2.amazonaws.com/xk6:latest"
+                  value={templateConfig.runner_image}
+                  onChange={(e) => setTemplateConfig({ ...templateConfig, runner_image: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:border-purple-500 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('jsScriptContent')}</label>
                 <textarea
                   required
                   rows={6}
@@ -2044,14 +2282,14 @@ export default function () {
                   onClick={() => setIsTemplateModalOpen(false)}
                   className="flex-1 py-3 border border-slate-850 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold transition cursor-pointer"
                 >
-                  Cancel
+                  {t('cancel')}
                 </button>
                 <button
                   type="submit"
                   disabled={savingTemplate}
                   className="flex-1 py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white rounded-xl text-xs font-semibold shadow-lg transition cursor-pointer disabled:opacity-50"
                 >
-                  {savingTemplate ? 'Saving...' : 'Save Template'}
+                  {savingTemplate ? t('saving') : t('saveTemplate')}
                 </button>
               </div>
             </form>
@@ -2070,10 +2308,7 @@ export default function () {
               <X className="w-5 h-5" />
             </button>
 
-            <h3 className="text-2xl font-bold text-white mb-2">Add Local User</h3>
-            <p className="text-slate-400 text-xs mb-6">
-              Create a new local account with assigned role permissions.
-            </p>
+            <h3 className="text-2xl font-bold text-white mb-2">{t('addLocalUser')}</h3>
 
             {userError && (
               <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-xs">
@@ -2083,7 +2318,7 @@ export default function () {
 
             <form onSubmit={handleSaveUser} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1.5">Username</label>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('username')}</label>
                 <input
                   type="text"
                   required
@@ -2095,7 +2330,7 @@ export default function () {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1.5">Password</label>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('password')}</label>
                 <input
                   type="password"
                   required
@@ -2107,15 +2342,15 @@ export default function () {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1.5">Role Authorization</label>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('roleAuthorization')}</label>
                 <select
                   value={newUserAccount.role}
                   onChange={(e) => setNewUserAccount({ ...newUserAccount, role: e.target.value })}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-200 focus:border-purple-500 outline-none"
                 >
-                  <option value="viewer">Viewer (Read-only access)</option>
-                  <option value="editor">Editor (Can manage and run load tests)</option>
-                  <option value="administrator">Administrator (Full access, manage users/SSO)</option>
+                  <option value="viewer">{t('viewerReadOnly')}</option>
+                  <option value="editor">{t('editorRoleDesc')}</option>
+                  <option value="administrator">{t('administrator')}</option>
                 </select>
               </div>
 
@@ -2125,14 +2360,14 @@ export default function () {
                   onClick={() => setIsUserModalOpen(false)}
                   className="flex-1 py-3 border border-slate-850 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold transition cursor-pointer"
                 >
-                  Cancel
+                  {t('cancel')}
                 </button>
                 <button
                   type="submit"
                   disabled={savingUser}
                   className="flex-1 py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white rounded-xl text-xs font-semibold shadow-lg transition cursor-pointer disabled:opacity-50"
                 >
-                  {savingUser ? 'Adding...' : 'Add User'}
+                  {savingUser ? t('adding') : t('addUser')}
                 </button>
               </div>
             </form>
@@ -2166,13 +2401,13 @@ export default function () {
                 onClick={() => setConfirmDialog(null)}
                 className="flex-1 py-2 border border-slate-850 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold transition cursor-pointer"
               >
-                {t('cancel') || 'Cancel'}
+                {t('cancel')}
               </button>
               <button
                 onClick={confirmDialog.onConfirm}
                 className="flex-1 py-2 bg-gradient-to-r from-purple-600 to-pink-500 text-white rounded-xl text-xs font-semibold shadow-lg transition cursor-pointer hover:from-purple-500 hover:to-pink-400"
               >
-                {t('confirm') || 'Confirm'}
+                {t('confirm')}
               </button>
             </div>
           </div>
@@ -2195,23 +2430,23 @@ export default function () {
 
             <div className="flex items-center space-x-3 text-red-400 mb-4">
               <ShieldAlert className="w-6 h-6 text-red-500 animate-bounce" />
-              <h3 className="text-xl font-bold text-white">{t('deleteClusterTitle') || 'Delete Kubernetes Cluster'}</h3>
+              <h3 className="text-xl font-bold text-white">{t('deleteClusterTitle')}</h3>
             </div>
 
             <div className="space-y-4">
               <p className="text-slate-300 text-sm leading-relaxed">
-                {t('deleteClusterConfirmPrefix') || 'Are you sure you want to delete the K8S Cluster'}{' '}
+                {t('deleteClusterConfirmPrefix')}{' '}
                 <strong className="font-bold text-red-400">"{deletingCluster.name}"</strong>
-                {t('deleteClusterConfirmSuffix') || '?'}
+                {t('deleteClusterConfirmSuffix')}
               </p>
 
               <div className="p-3 critical-warning-box rounded-xl text-xs leading-relaxed">
-                {t('deleteClusterWarning') || 'This action cannot be undone. This will permanently delete the cluster connection and remove it from your settings.'}
+                {t('deleteClusterWarning')}
               </div>
 
               <div className="space-y-2">
                 <label className="block text-xs font-semibold text-slate-400">
-                  {t('deleteClusterTypePrompt') || 'Please type the cluster name to confirm:'}
+                  {t('deleteClusterTypePrompt')}
                 </label>
                 <input
                   type="text"
@@ -2232,7 +2467,7 @@ export default function () {
                   }}
                   className="flex-1 py-3 border border-slate-850 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold transition cursor-pointer"
                 >
-                  {t('cancel') || 'Cancel'}
+                  {t('cancel')}
                 </button>
                 <button
                   type="button"
@@ -2240,7 +2475,7 @@ export default function () {
                   disabled={confirmClusterName !== deletingCluster.name}
                   className="flex-1 py-3 bg-gradient-to-r from-red-600 to-rose-500 text-white btn-text-always-light rounded-xl text-xs font-semibold shadow-lg transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed hover:from-red-500 hover:to-rose-400"
                 >
-                  {t('delete') || 'Delete'}
+                  {t('delete')}
                 </button>
               </div>
             </div>
@@ -2254,10 +2489,10 @@ export default function () {
           <div>
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
               <span className="w-5 h-5 rounded-full bg-gradient-to-r from-purple-600 to-pink-500 animate-pulse shrink-0" />
-              <span>{t('colorPalette') || "Color Palette"}</span>
+              <span>{t('colorPalette')}</span>
             </h3>
             <p className="text-slate-400 text-xs mt-1">
-              Select a color palette to customize the dashboard primary theme and highlight colors.
+              {t('createPaletteDesc')}
             </p>
           </div>
           <button
@@ -2285,7 +2520,7 @@ export default function () {
             className="flex items-center gap-1.5 px-4 py-2 bg-slate-950/80 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs font-semibold text-slate-200 rounded-xl transition cursor-pointer self-start sm:self-auto"
           >
             <Plus className="w-4 h-4 text-purple-400" />
-            <span>{t('addCustomPalette') || "+ Add Custom Palette"}</span>
+            <span>{t('addCustomPalette')}</span>
           </button>
         </div>
 
@@ -2314,7 +2549,7 @@ export default function () {
                   <span className="text-xs font-semibold text-slate-200 text-center">{displayName}</span>
                   {isSelected && (
                     <span className="mt-2 text-[9px] font-bold text-purple-400 uppercase tracking-wider">
-                      {t('active') || 'Active'}
+                      {t('active')}
                     </span>
                   )}
                 </button>
@@ -2323,7 +2558,7 @@ export default function () {
                     type="button"
                     onClick={(e) => handleEditCustomPaletteClick(e, palette.id)}
                     className="p-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-400 hover:text-purple-400 rounded-lg shadow-md cursor-pointer"
-                    title={t('edit') || "Edit"}
+                    title={t('edit')}
                   >
                     <Edit className="w-3.5 h-3.5" />
                   </button>
@@ -2331,7 +2566,7 @@ export default function () {
                     type="button"
                     onClick={(e) => handleDeleteCustomPaletteClick(e, palette.id, displayName)}
                     className="p-1.5 bg-slate-950 hover:bg-red-950/85 border border-slate-800 hover:border-red-900/60 text-slate-400 hover:text-red-400 rounded-lg shadow-md cursor-pointer"
-                    title={t('delete') || "Delete"}
+                    title={t('delete')}
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
@@ -2358,19 +2593,19 @@ export default function () {
             </button>
 
             <h3 className="text-2xl font-bold text-white mb-2">
-              {editingPaletteId ? (t('editCustomPalette') || 'Edit Custom Palette') : (t('customPaletteTitle') || 'Add Custom Palette')}
+              {editingPaletteId ? t('editCustomPalette') : t('customPaletteTitle')}
             </h3>
             <p className="text-slate-400 text-xs mb-6">
               {editingPaletteId 
-                ? 'Update your custom color palette. Adjust the primary and accent colors, and save the changes.'
-                : 'Create a custom color palette. As you pick the base colors, variant shades are auto-calculated but remain fully editable.'}
+                ? t('editPaletteDesc')
+                : t('createPaletteDesc')}
             </p>
 
             <form onSubmit={handleAddCustomPalette} className="flex-1 overflow-y-auto pr-2 space-y-6">
               <div className="space-y-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-400 mb-1.5">
-                    {t('paletteName') || 'Palette Name'}
+                    {t('paletteName')}
                   </label>
                   <input
                     type="text"
@@ -2385,7 +2620,7 @@ export default function () {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-slate-400 mb-1.5">
-                      {t('backgroundDark') || 'Dark Background Color'}
+                      {t('backgroundDark')}
                     </label>
                     <div className="flex gap-2">
                       <input
@@ -2406,7 +2641,7 @@ export default function () {
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-400 mb-1.5">
-                      {t('backgroundLight') || 'Light Background Color'}
+                      {t('backgroundLight')}
                     </label>
                     <div className="flex gap-2">
                       <input
@@ -2431,12 +2666,12 @@ export default function () {
                 {/* Primary Colors Section */}
                 <div className="space-y-4">
                   <h4 className="text-sm font-bold text-slate-300 border-b border-slate-800/80 pb-2">
-                    {t('primaryColor') || 'Primary Colors'}
+                    {t('primaryColors')}
                   </h4>
 
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                      {t('primaryColor') || 'Base Primary'}
+                      {t('basePrimary')}
                     </label>
                     <div className="flex gap-2">
                       <input
@@ -2457,7 +2692,7 @@ export default function () {
 
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                      {t('primaryHover') || 'Primary Hover'}
+                      {t('primaryHover')}
                     </label>
                     <div className="flex gap-2">
                       <input
@@ -2478,7 +2713,7 @@ export default function () {
 
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                      {t('primaryLight') || 'Primary Light'}
+                      {t('primaryLight')}
                     </label>
                     <div className="flex gap-2">
                       <input
@@ -2499,7 +2734,7 @@ export default function () {
 
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                      {t('primaryLightest') || 'Primary Lightest'}
+                      {t('primaryLightest')}
                     </label>
                     <div className="flex gap-2">
                       <input
@@ -2520,7 +2755,7 @@ export default function () {
 
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                      {t('primaryDark') || 'Primary Dark'}
+                      {t('primaryDark')}
                     </label>
                     <div className="flex gap-2">
                       <input
@@ -2543,12 +2778,12 @@ export default function () {
                 {/* Accent Colors Section */}
                 <div className="space-y-4">
                   <h4 className="text-sm font-bold text-slate-300 border-b border-slate-800/80 pb-2">
-                    {t('accentColor') || 'Accent Colors'}
+                    {t('accentColor')}
                   </h4>
 
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                      {t('accentColor') || 'Base Accent'}
+                      {t('accentColor')}
                     </label>
                     <div className="flex gap-2">
                       <input
@@ -2569,7 +2804,7 @@ export default function () {
 
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                      {t('accentHover') || 'Accent Hover'}
+                      {t('accentHover')}
                     </label>
                     <div className="flex gap-2">
                       <input
@@ -2590,7 +2825,7 @@ export default function () {
 
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                      {t('accentLight') || 'Accent Light'}
+                      {t('accentLight')}
                     </label>
                     <div className="flex gap-2">
                       <input
@@ -2611,7 +2846,7 @@ export default function () {
 
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                      {t('accentLightest') || 'Accent Lightest'}
+                      {t('accentLightest')}
                     </label>
                     <div className="flex gap-2">
                       <input
@@ -2632,7 +2867,7 @@ export default function () {
 
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                      {t('accentDark') || 'Accent Dark'}
+                      {t('accentDark')}
                     </label>
                     <div className="flex gap-2">
                       <input
@@ -2663,7 +2898,7 @@ export default function () {
                   }}
                   className="flex-1 py-3 border border-slate-850 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold transition cursor-pointer"
                 >
-                  {t('cancel') || 'Cancel'}
+                  {t('cancel')}
                 </button>
                 {editingPaletteId && (
                   <button
@@ -2671,14 +2906,14 @@ export default function () {
                     onClick={handleResetFormColors}
                     className="flex-1 py-3 border border-slate-850 hover:bg-slate-800 hover:text-white text-slate-300 rounded-xl text-xs font-semibold transition cursor-pointer"
                   >
-                    {t('reset') || 'Reset'}
+                    {t('reset')}
                   </button>
                 )}
                 <button
                   type="submit"
                   className="flex-1 py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white rounded-xl text-xs font-semibold shadow-lg transition cursor-pointer hover:from-purple-500 hover:to-pink-400"
                 >
-                  {editingPaletteId ? (t('save') || 'Save Changes') : (t('createPalette') || 'Create Palette')}
+                  {editingPaletteId ? t('saveChanges') : t('createPalette')}
                 </button>
               </div>
             </form>

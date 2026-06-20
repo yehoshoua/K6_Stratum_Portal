@@ -30,6 +30,7 @@ export interface ClusterConfig {
   created_at: string;
   kubernetes_version?: string;
   region?: string;
+  aws_account_id?: string;
   namespaces?: string;
   k6_operator_installed?: boolean;
 }
@@ -56,11 +57,20 @@ export interface K6Template {
   parallelism: number;
   script_name: string;
   script_file: string;
+  runner_image?: string;
   cpu_limit: string;
   mem_limit: string;
   script_content: string;
   created_at: string;
   sla_thresholds?: string;
+}
+
+export interface EcrCheck {
+  exists: boolean;
+  repository: string;
+  registry: string;
+  image: string;
+  message?: string;
 }
 
 export interface TestSchedule {
@@ -73,6 +83,10 @@ export interface TestSchedule {
   active: boolean;
   created_at?: string;
 }
+
+export type CreateScheduleInput = Omit<TestSchedule, 'id' | 'created_at'> & {
+  enforce_round_hour?: boolean;
+};
 
 export interface K6Report {
   key: string;
@@ -118,6 +132,13 @@ export interface APIToken {
   token?: string;
 }
 
+export interface RunDefaults {
+  output_args: string;
+  use_output: boolean;
+  use_image: boolean;
+  image_url: string;
+  env_vars: { key: string; value: string }[];
+}
 
 
 export interface K6CRD {
@@ -131,7 +152,13 @@ export interface K6CRD {
   spec: any;
   status?: {
     stage: string;
+    active?: boolean;
+    suspended?: boolean;
   };
+}
+
+export interface BatchWorkload extends K6CRD {
+  cluster_id: string;
 }
 
 export interface K8sPod {
@@ -247,6 +274,15 @@ export const api = {
     return res.json();
   },
 
+  async checkEcrRepo(clusterId: string, image: string): Promise<EcrCheck> {
+    const res = await apiFetch(`${BASE_URL}/k8s/clusters/${clusterId}/ecr/check?image=${encodeURIComponent(image)}`, { headers: getHeaders() });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to check ECR repository' }));
+      throw new Error(err.error || 'Failed to check ECR repository');
+    }
+    return res.json();
+  },
+
   async getConfigMap(clusterId: string, name: string, namespace = 'default'): Promise<{ name: string; namespace?: string; data: Record<string, string> }> {
     const res = await apiFetch(`${BASE_URL}/k8s/clusters/${clusterId}/configmaps/${name}?namespace=${namespace}`, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to fetch ConfigMap');
@@ -324,6 +360,45 @@ export const api = {
       headers: getHeaders(),
     });
     if (!res.ok) throw new Error('Failed to delete K6 CRD');
+  },
+
+  async getBatchWorkloads(clusterId: string, namespace = 'default'): Promise<K6CRD[]> {
+    const res = await apiFetch(`${BASE_URL}/k8s/clusters/${clusterId}/batch-workloads?namespace=${namespace}`, {
+      headers: getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({} as { error?: string }));
+      const detail = err.error || (res.status === 404
+        ? 'batch-workloads API not found — restart the backend to pick up the latest routes'
+        : `HTTP ${res.status}`);
+      throw new Error(detail);
+    }
+    return res.json();
+  },
+
+  async toggleBatchCronJob(clusterId: string, name: string, namespace = 'default'): Promise<K6CRD> {
+    const res = await apiFetch(
+      `${BASE_URL}/k8s/clusters/${clusterId}/batch-workloads/cronjobs/${name}/toggle?namespace=${namespace}`,
+      { method: 'POST', headers: getHeaders() },
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to toggle CronJob');
+    }
+    return res.json();
+  },
+
+  async updateSchedule(id: number, schedule: CreateScheduleInput): Promise<TestSchedule> {
+    const res = await apiFetch(`${BASE_URL}/settings/schedules/${id}`, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify(schedule),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to update schedule');
+    }
+    return res.json();
   },
 
   // InfluxDB telemetry runs
@@ -456,7 +531,15 @@ export const api = {
   // K6 Run Templates
   async getTemplates(): Promise<K6Template[]> {
     const res = await apiFetch(`${BASE_URL}/settings/templates`, { headers: getHeaders() });
-    if (!res.ok) throw new Error('Failed to fetch K6 templates');
+    if (!res.ok) {
+      const bodyText = await res.text();
+      try {
+        const err = JSON.parse(bodyText);
+        throw new Error(err.error || bodyText || 'Failed to fetch K6 templates');
+      } catch {
+        throw new Error(bodyText || 'Failed to fetch K6 templates');
+      }
+    }
     return res.json();
   },
 
@@ -628,7 +711,7 @@ export const api = {
     return res.json();
   },
 
-  async createSchedule(schedule: Omit<TestSchedule, 'id' | 'created_at'>): Promise<TestSchedule> {
+  async createSchedule(schedule: CreateScheduleInput): Promise<TestSchedule> {
     const res = await apiFetch(`${BASE_URL}/settings/schedules`, {
       method: 'POST',
       headers: getHeaders(),
@@ -705,6 +788,41 @@ export const api = {
     const res = await apiFetch(`${BASE_URL}/k8s/clusters/${clusterId}/pods?namespace=${namespace}`, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to list pods');
     return res.json();
+  },
+
+  async getRunDefaults(): Promise<RunDefaults> {
+    const res = await apiFetch(`${BASE_URL}/settings/defaults`, { headers: getHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch run defaults');
+    const raw = await res.json();
+    const envVars = Array.isArray(raw.env_vars)
+      ? raw.env_vars.map((entry: any) => ({
+          key: typeof entry?.key === 'string' ? entry.key : (typeof entry?.name === 'string' ? entry.name : ''),
+          value: typeof entry?.value === 'string' ? entry.value : '',
+        })).filter((entry: { key: string; value: string }) => entry.key !== '' || entry.value !== '')
+      : [];
+    return {
+      output_args: raw.output_args ?? '--out influxdb=http://grafana-hub-influxdb.grafana-hub.svc.cluster.local:8086/k6s',
+      use_output:  raw.use_output === 'true',
+      use_image:   raw.use_image  === 'true',
+      image_url:   raw.image_url   ?? '',
+      env_vars:    envVars,
+    };
+  },
+
+  async saveRunDefaults(d: RunDefaults): Promise<void> {
+    const body = {
+      output_args: d.output_args,
+      use_output:  d.use_output  ? 'true' : 'false',
+      use_image:   d.use_image   ? 'true' : 'false',
+      image_url:   d.image_url,
+      env_vars:    d.env_vars.map((entry) => ({ key: entry.key, value: entry.value })),
+    };
+    const res = await apiFetch(`${BASE_URL}/settings/defaults`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error('Failed to save run defaults');
   },
 };
 

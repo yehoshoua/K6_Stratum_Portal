@@ -1,0 +1,15 @@
+Account,Region,Cluster,InstanceId,Name,InstanceType,State,PrivateIp,AvailabilityZone,LaunchTime
+720146705806,us-west-2,eks10,i-04344ed56e9ab7615,eks10-shared-usw_karpenter_eks10-shared-usw,c6a.2xlarge,running,10.59.40.163,us-west-2c,2026-05-27T13:18:31+00:00
+720146705806,us-west-2,eks10,i-0caeca761804ae37f,eks10-shared-usw_karpenter_eks10-shared-usw,r5dn.2xlarge,running,10.59.6.208,us-west-2a,2025-11-11T13:08:02+00:00
+720146705806,us-west-2,eks11,i-07aa47610836223e2,eks11-shared-usw_karpenter_eks11-shared-usw,r5dn.2xlarge,running,10.61.21.69,us-west-2b,2025-12-22T21:14:49+00:00
+720146705806,us-west-2,eks11,i-0bd2cafbafa91bde8,eks11-shared-usw_karpenter_eks11-shared-usw,r5dn.2xlarge,running,10.61.15.232,us-west-2a,2025-12-22T21:14:49+00:00
+720146705806,us-west-2,eks12,i-044251f1802810257,eks12-shared-usw_karpenter_eks12-shared-usw,r5dn.2xlarge,running,10.62.19.5,us-west-2b,2026-04-27T14:56:35+00:00
+720146705806,us-west-2,eks12,i-07ef052d0c4a4cca9,eks12-shared-usw_karpenter_eks12-shared-usw,r5dn.2xlarge,running,10.62.13.153,us-west-2a,2026-04-27T14:56:35+00:00
+720146705806,us-west-2,eks13,i-017eb439f70ad2715,eks13-shared-usw_karpenter_eks13-shared-usw,r5dn.2xlarge,running,10.63.6.169,us-west-2a,2026-05-07T13:05:24+00:00
+720146705806,us-west-2,eks13,i-01f1c1439c3d82767,eks13-shared-usw_karpenter_eks13-shared-usw,r5dn.2xlarge,running,10.63.34.116,us-west-2c,2026-05-07T13:05:24+00:00
+720146705806,us-west-2,eks14,i-081502080d7076469,eks14-shared-usw_karpenter_eks14-shared-usw,r5dn.2xlarge,running,10.64.29.61,us-west-2b,2026-04-28T19:25:04+00:00
+720146705806,us-west-2,eks14,i-0b1f40f50eb34933d,eks14-shared-usw_karpenter_eks14-shared-usw,r5dn.2xlarge,running,10.64.8.21,us-west-2a,2026-04-28T19:25:05+00:00
+720146705806,us-west-2,eks15,i-06e3c20c00067f4f3,eks15-shared-usw_karpenter_eks15-shared-usw,r5dn.2xlarge,running,10.66.1.254,us-west-2a,2026-04-20T01:46:18+00:00
+720146705806,us-west-2,eks15,i-089b78cf924ee2430,eks15-shared-usw_karpenter_eks15-shared-usw,r5dn.2xlarge,running,10.66.28.109,us-west-2b,2026-04-20T01:46:18+00:00
+720146705806,us-west-2,eks16,i-05f52e614539e21cb,eks16-shared-usw_karpenter_eks16-shared-usw,r5dn.2xlarge,running,10.71.19.37,us-west-2b,2026-02-07T13:26:59+00:00
+720146705806,us-west-2,eks16,i-0e03041fb66637e0e,eks16-shared-usw_karpenter_eks16-shared-usw,r5dn.2xlarge,running,10.71.36.184,us-west-2c,2025-11-05T01:31:42+00:00

@@ -21,17 +21,18 @@ type DB struct {
 }
 
 type ClusterConfig struct {
-	ID                string    `json:"id"`
-	Name              string    `json:"name"`
-	APIServerURL      string    `json:"api_server_url"`
-	AuthType          string    `json:"auth_type"`
-	EncryptedData     string    `json:"-"`
-	CACertBase64      string    `json:"ca_cert_base64,omitempty"`
-	CreatedAt         time.Time `json:"created_at"`
-	KubernetesVersion string    `json:"kubernetes_version,omitempty"`
-	Region            string    `json:"region,omitempty"`
-	Namespaces        string    `json:"namespaces,omitempty"` // Comma-separated list of allowed namespaces
-	K6OperatorInstalled bool    `json:"k6_operator_installed"`
+	ID                  string    `json:"id"`
+	Name                string    `json:"name"`
+	APIServerURL        string    `json:"api_server_url"`
+	AuthType            string    `json:"auth_type"`
+	EncryptedData       string    `json:"-"`
+	CACertBase64        string    `json:"ca_cert_base64,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
+	KubernetesVersion   string    `json:"kubernetes_version,omitempty"`
+	Region              string    `json:"region,omitempty"`
+	Namespaces          string    `json:"namespaces,omitempty"`     // Comma-separated list of allowed namespaces
+	AWSAccountID        string    `json:"aws_account_id,omitempty"` // AWS Account ID for ECR image resolution
+	K6OperatorInstalled bool      `json:"k6_operator_installed"`
 }
 
 type InfluxConfig struct {
@@ -55,6 +56,7 @@ type K6Template struct {
 	Parallelism   int       `json:"parallelism"`
 	ScriptName    string    `json:"script_name"`
 	ScriptFile    string    `json:"script_file"`
+	RunnerImage   string    `json:"runner_image"`
 	CPULimit      string    `json:"cpu_limit"`
 	MemLimit      string    `json:"mem_limit"`
 	ScriptContent string    `json:"script_content"`
@@ -100,8 +102,6 @@ type SSOConfig struct {
 	AdminGroups  string `json:"admin_groups"`
 	EditorGroups string `json:"editor_groups"`
 }
-
-
 
 func InitDB(driverName, dsn string) (*DB, error) {
 	if driverName == "" {
@@ -196,6 +196,7 @@ func (db *DB) createTables() error {
 		parallelism INTEGER NOT NULL,
 		script_name TEXT NOT NULL,
 		script_file TEXT NOT NULL,
+		runner_image TEXT,
 		cpu_limit TEXT NOT NULL,
 		mem_limit TEXT NOT NULL,
 		script_content TEXT NOT NULL,
@@ -359,32 +360,36 @@ func (db *DB) createTables() error {
 		}
 	}
 
-	// Migration: Add sla_thresholds column to k6_templates table if it does not exist
-	var hasSlaThresholds bool
+	// Migration: Add aws_account_id column to clusters table if it does not exist
+	var hasAWSAccountID bool
 	if db.driver == "postgres" {
-		_ = db.conn.QueryRow("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='k6_templates' AND column_name='sla_thresholds');").Scan(&hasSlaThresholds)
+		_ = db.conn.QueryRow("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='clusters' AND column_name='aws_account_id');").Scan(&hasAWSAccountID)
 	} else {
-		tRows, err := db.conn.Query("PRAGMA table_info(k6_templates);")
+		awsRows, err := db.conn.Query("PRAGMA table_info(clusters);")
 		if err == nil {
-			for tRows.Next() {
+			for awsRows.Next() {
 				var cid int
 				var name, ctype string
 				var notnull, pk int
 				var dfltVal sql.NullString
-				if err := tRows.Scan(&cid, &name, &ctype, &notnull, &dfltVal, &pk); err == nil {
-					if name == "sla_thresholds" {
-						hasSlaThresholds = true
+				if err := awsRows.Scan(&cid, &name, &ctype, &notnull, &dfltVal, &pk); err == nil {
+					if name == "aws_account_id" {
+						hasAWSAccountID = true
 					}
 				}
 			}
-			tRows.Close()
+			awsRows.Close()
 		}
 	}
-	if !hasSlaThresholds {
-		if _, err := db.conn.Exec("ALTER TABLE k6_templates ADD COLUMN sla_thresholds TEXT;"); err != nil {
-			log.Printf("Warning: failed to migrate sla_thresholds column on k6_templates: %v", err)
+	if !hasAWSAccountID {
+		if _, err := db.conn.Exec("ALTER TABLE clusters ADD COLUMN aws_account_id TEXT DEFAULT '';"); err != nil {
+			log.Printf("Warning: failed to migrate aws_account_id column on clusters: %v", err)
 		}
 	}
+
+	db.ensureSlaThresholdsColumn()
+
+	db.ensureRunnerImageColumn()
 
 	// Migration: Add name, admin_groups, and editor_groups columns to sso_config table if they do not exist
 	var hasSsoName, hasAdminGroups, hasEditorGroups bool
@@ -438,8 +443,8 @@ func (db *DB) SaveCluster(c *ClusterConfig) error {
 	var query string
 	if db.driver == "postgres" {
 		query = `
-		INSERT INTO clusters (id, name, api_server_url, auth_type, encrypted_data, ca_cert_base64, created_at, kubernetes_version, region, namespaces)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		INSERT INTO clusters (id, name, api_server_url, auth_type, encrypted_data, ca_cert_base64, created_at, kubernetes_version, region, namespaces, aws_account_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			api_server_url = EXCLUDED.api_server_url,
@@ -449,19 +454,20 @@ func (db *DB) SaveCluster(c *ClusterConfig) error {
 			created_at = EXCLUDED.created_at,
 			kubernetes_version = EXCLUDED.kubernetes_version,
 			region = EXCLUDED.region,
-			namespaces = EXCLUDED.namespaces;`
+			namespaces = EXCLUDED.namespaces,
+			aws_account_id = EXCLUDED.aws_account_id;`
 	} else {
 		query = `
-		INSERT OR REPLACE INTO clusters (id, name, api_server_url, auth_type, encrypted_data, ca_cert_base64, created_at, kubernetes_version, region, namespaces)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+		INSERT OR REPLACE INTO clusters (id, name, api_server_url, auth_type, encrypted_data, ca_cert_base64, created_at, kubernetes_version, region, namespaces, aws_account_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 	}
 
-	_, err := db.conn.Exec(query, c.ID, c.Name, c.APIServerURL, c.AuthType, c.EncryptedData, c.CACertBase64, c.CreatedAt, c.KubernetesVersion, c.Region, c.Namespaces)
+	_, err := db.conn.Exec(query, c.ID, c.Name, c.APIServerURL, c.AuthType, c.EncryptedData, c.CACertBase64, c.CreatedAt, c.KubernetesVersion, c.Region, c.Namespaces, c.AWSAccountID)
 	return err
 }
 
 func (db *DB) GetClusters() ([]*ClusterConfig, error) {
-	query := db.rebind(`SELECT id, name, api_server_url, auth_type, encrypted_data, ca_cert_base64, created_at, kubernetes_version, region, namespaces FROM clusters;`)
+	query := db.rebind(`SELECT id, name, api_server_url, auth_type, encrypted_data, ca_cert_base64, created_at, kubernetes_version, region, namespaces, COALESCE(aws_account_id,'') FROM clusters;`)
 	rows, err := db.conn.Query(query)
 	if err != nil {
 		return nil, err
@@ -471,7 +477,7 @@ func (db *DB) GetClusters() ([]*ClusterConfig, error) {
 	list := make([]*ClusterConfig, 0)
 	for rows.Next() {
 		var c ClusterConfig
-		err := rows.Scan(&c.ID, &c.Name, &c.APIServerURL, &c.AuthType, &c.EncryptedData, &c.CACertBase64, &c.CreatedAt, &c.KubernetesVersion, &c.Region, &c.Namespaces)
+		err := rows.Scan(&c.ID, &c.Name, &c.APIServerURL, &c.AuthType, &c.EncryptedData, &c.CACertBase64, &c.CreatedAt, &c.KubernetesVersion, &c.Region, &c.Namespaces, &c.AWSAccountID)
 		if err != nil {
 			return nil, err
 		}
@@ -508,6 +514,18 @@ func (db *DB) GetSetting(key string) (string, error) {
 		return "", err
 	}
 	return value, nil
+}
+
+func (db *DB) UpsertSetting(key, value string) error {
+	var query string
+	if db.driver == "postgres" {
+		query = `INSERT INTO settings (key, value) VALUES ($1, $2)
+			ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;`
+	} else {
+		query = `INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?);`
+	}
+	_, err := db.conn.Exec(query, key, value)
+	return err
 }
 
 func (db *DB) SaveInfluxConfig(c *InfluxConfig) error {
@@ -606,13 +624,14 @@ func (db *DB) SaveTemplate(t *K6Template) error {
 	var query string
 	if db.driver == "postgres" {
 		query = `
-		INSERT INTO k6_templates (id, name, parallelism, script_name, script_file, cpu_limit, mem_limit, script_content, created_at, sla_thresholds)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		INSERT INTO k6_templates (id, name, parallelism, script_name, script_file, runner_image, cpu_limit, mem_limit, script_content, created_at, sla_thresholds)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			parallelism = EXCLUDED.parallelism,
 			script_name = EXCLUDED.script_name,
 			script_file = EXCLUDED.script_file,
+			runner_image = EXCLUDED.runner_image,
 			cpu_limit = EXCLUDED.cpu_limit,
 			mem_limit = EXCLUDED.mem_limit,
 			script_content = EXCLUDED.script_content,
@@ -620,16 +639,58 @@ func (db *DB) SaveTemplate(t *K6Template) error {
 			sla_thresholds = EXCLUDED.sla_thresholds;`
 	} else {
 		query = `
-		INSERT OR REPLACE INTO k6_templates (id, name, parallelism, script_name, script_file, cpu_limit, mem_limit, script_content, created_at, sla_thresholds)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+		INSERT OR REPLACE INTO k6_templates (id, name, parallelism, script_name, script_file, runner_image, cpu_limit, mem_limit, script_content, created_at, sla_thresholds)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 	}
-	_, err := db.conn.Exec(query, t.ID, t.Name, t.Parallelism, t.ScriptName, t.ScriptFile, t.CPULimit, t.MemLimit, t.ScriptContent, t.CreatedAt, t.SLAThresholds)
+	_, err := db.conn.Exec(query, t.ID, t.Name, t.Parallelism, t.ScriptName, t.ScriptFile, t.RunnerImage, t.CPULimit, t.MemLimit, t.ScriptContent, t.CreatedAt, t.SLAThresholds)
+	if err != nil && (isMissingColumnError(err, "runner_image") || isMissingColumnError(err, "sla_thresholds")) {
+		db.ensureRunnerImageColumn()
+		db.ensureSlaThresholdsColumn()
+		_, err = db.conn.Exec(query, t.ID, t.Name, t.Parallelism, t.ScriptName, t.ScriptFile, t.RunnerImage, t.CPULimit, t.MemLimit, t.ScriptContent, t.CreatedAt, t.SLAThresholds)
+	}
+	if err == nil {
+		return nil
+	}
+
+	// Final fallback for legacy schemas without runner_image/sla_thresholds columns.
+	if db.driver != "postgres" && (isMissingColumnError(err, "runner_image") || isMissingColumnError(err, "sla_thresholds")) {
+		legacyQuery := `
+		INSERT OR REPLACE INTO k6_templates (id, name, parallelism, script_name, script_file, cpu_limit, mem_limit, script_content, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`
+		_, err = db.conn.Exec(legacyQuery, t.ID, t.Name, t.Parallelism, t.ScriptName, t.ScriptFile, t.CPULimit, t.MemLimit, t.ScriptContent, t.CreatedAt)
+	}
 	return err
 }
 
 func (db *DB) GetTemplates() ([]*K6Template, error) {
-	query := db.rebind(`SELECT id, name, parallelism, script_name, script_file, cpu_limit, mem_limit, script_content, created_at, sla_thresholds FROM k6_templates ORDER BY created_at DESC;`)
-	rows, err := db.conn.Query(query)
+	queries := []struct {
+		query          string
+		hasRunnerImage bool
+		hasSla         bool
+	}{
+		{db.rebind(`SELECT id, name, parallelism, script_name, script_file, runner_image, cpu_limit, mem_limit, script_content, created_at, sla_thresholds FROM k6_templates ORDER BY created_at DESC;`), true, true},
+		{db.rebind(`SELECT id, name, parallelism, script_name, script_file, cpu_limit, mem_limit, script_content, created_at, sla_thresholds FROM k6_templates ORDER BY created_at DESC;`), false, true},
+		{db.rebind(`SELECT id, name, parallelism, script_name, script_file, runner_image, cpu_limit, mem_limit, script_content, created_at FROM k6_templates ORDER BY created_at DESC;`), true, false},
+		{db.rebind(`SELECT id, name, parallelism, script_name, script_file, cpu_limit, mem_limit, script_content, created_at FROM k6_templates ORDER BY created_at DESC;`), false, false},
+	}
+
+	var (
+		rows           *sql.Rows
+		err            error
+		hasRunnerImage bool
+		hasSla         bool
+	)
+	for _, candidate := range queries {
+		rows, err = db.conn.Query(candidate.query)
+		if err != nil && (isMissingColumnError(err, "runner_image") || isMissingColumnError(err, "sla_thresholds")) {
+			continue
+		}
+		if err == nil {
+			hasRunnerImage = candidate.hasRunnerImage
+			hasSla = candidate.hasSla
+		}
+		break
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -639,12 +700,26 @@ func (db *DB) GetTemplates() ([]*K6Template, error) {
 	for rows.Next() {
 		var t K6Template
 		var slaNull sql.NullString
-		err := rows.Scan(&t.ID, &t.Name, &t.Parallelism, &t.ScriptName, &t.ScriptFile, &t.CPULimit, &t.MemLimit, &t.ScriptContent, &t.CreatedAt, &slaNull)
-		if err != nil {
-			return nil, err
+		var runnerNull sql.NullString
+		var scanErr error
+		switch {
+		case hasRunnerImage && hasSla:
+			scanErr = rows.Scan(&t.ID, &t.Name, &t.Parallelism, &t.ScriptName, &t.ScriptFile, &runnerNull, &t.CPULimit, &t.MemLimit, &t.ScriptContent, &t.CreatedAt, &slaNull)
+		case hasRunnerImage && !hasSla:
+			scanErr = rows.Scan(&t.ID, &t.Name, &t.Parallelism, &t.ScriptName, &t.ScriptFile, &runnerNull, &t.CPULimit, &t.MemLimit, &t.ScriptContent, &t.CreatedAt)
+		case !hasRunnerImage && hasSla:
+			scanErr = rows.Scan(&t.ID, &t.Name, &t.Parallelism, &t.ScriptName, &t.ScriptFile, &t.CPULimit, &t.MemLimit, &t.ScriptContent, &t.CreatedAt, &slaNull)
+		default:
+			scanErr = rows.Scan(&t.ID, &t.Name, &t.Parallelism, &t.ScriptName, &t.ScriptFile, &t.CPULimit, &t.MemLimit, &t.ScriptContent, &t.CreatedAt)
+		}
+		if scanErr != nil {
+			return nil, scanErr
 		}
 		if slaNull.Valid {
 			t.SLAThresholds = slaNull.String
+		}
+		if runnerNull.Valid {
+			t.RunnerImage = runnerNull.String
 		}
 		list = append(list, &t)
 	}
@@ -652,10 +727,45 @@ func (db *DB) GetTemplates() ([]*K6Template, error) {
 }
 
 func (db *DB) GetTemplate(id string) (*K6Template, error) {
-	query := db.rebind(`SELECT id, name, parallelism, script_name, script_file, cpu_limit, mem_limit, script_content, created_at, sla_thresholds FROM k6_templates WHERE id = ? LIMIT 1;`)
-	var t K6Template
-	var slaNull sql.NullString
-	err := db.conn.QueryRow(query, id).Scan(&t.ID, &t.Name, &t.Parallelism, &t.ScriptName, &t.ScriptFile, &t.CPULimit, &t.MemLimit, &t.ScriptContent, &t.CreatedAt, &slaNull)
+	queries := []struct {
+		query          string
+		hasRunnerImage bool
+		hasSla         bool
+	}{
+		{db.rebind(`SELECT id, name, parallelism, script_name, script_file, runner_image, cpu_limit, mem_limit, script_content, created_at, sla_thresholds FROM k6_templates WHERE id = ? LIMIT 1;`), true, true},
+		{db.rebind(`SELECT id, name, parallelism, script_name, script_file, cpu_limit, mem_limit, script_content, created_at, sla_thresholds FROM k6_templates WHERE id = ? LIMIT 1;`), false, true},
+		{db.rebind(`SELECT id, name, parallelism, script_name, script_file, runner_image, cpu_limit, mem_limit, script_content, created_at FROM k6_templates WHERE id = ? LIMIT 1;`), true, false},
+		{db.rebind(`SELECT id, name, parallelism, script_name, script_file, cpu_limit, mem_limit, script_content, created_at FROM k6_templates WHERE id = ? LIMIT 1;`), false, false},
+	}
+
+	var (
+		t              K6Template
+		slaNull        sql.NullString
+		runnerNull     sql.NullString
+		err            error
+		hasRunnerImage bool
+		hasSla         bool
+	)
+	for _, candidate := range queries {
+		switch {
+		case candidate.hasRunnerImage && candidate.hasSla:
+			err = db.conn.QueryRow(candidate.query, id).Scan(&t.ID, &t.Name, &t.Parallelism, &t.ScriptName, &t.ScriptFile, &runnerNull, &t.CPULimit, &t.MemLimit, &t.ScriptContent, &t.CreatedAt, &slaNull)
+		case candidate.hasRunnerImage && !candidate.hasSla:
+			err = db.conn.QueryRow(candidate.query, id).Scan(&t.ID, &t.Name, &t.Parallelism, &t.ScriptName, &t.ScriptFile, &runnerNull, &t.CPULimit, &t.MemLimit, &t.ScriptContent, &t.CreatedAt)
+		case !candidate.hasRunnerImage && candidate.hasSla:
+			err = db.conn.QueryRow(candidate.query, id).Scan(&t.ID, &t.Name, &t.Parallelism, &t.ScriptName, &t.ScriptFile, &t.CPULimit, &t.MemLimit, &t.ScriptContent, &t.CreatedAt, &slaNull)
+		default:
+			err = db.conn.QueryRow(candidate.query, id).Scan(&t.ID, &t.Name, &t.Parallelism, &t.ScriptName, &t.ScriptFile, &t.CPULimit, &t.MemLimit, &t.ScriptContent, &t.CreatedAt)
+		}
+		if err != nil && (isMissingColumnError(err, "runner_image") || isMissingColumnError(err, "sla_thresholds")) {
+			continue
+		}
+		if err == nil {
+			hasRunnerImage = candidate.hasRunnerImage
+			hasSla = candidate.hasSla
+		}
+		break
+	}
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -665,6 +775,15 @@ func (db *DB) GetTemplate(id string) (*K6Template, error) {
 	if slaNull.Valid {
 		t.SLAThresholds = slaNull.String
 	}
+	if runnerNull.Valid {
+		t.RunnerImage = runnerNull.String
+	}
+	if !hasRunnerImage {
+		t.RunnerImage = ""
+	}
+	if !hasSla {
+		t.SLAThresholds = ""
+	}
 	return &t, nil
 }
 
@@ -672,6 +791,80 @@ func (db *DB) DeleteTemplate(id string) error {
 	query := db.rebind(`DELETE FROM k6_templates WHERE id = ?;`)
 	_, err := db.conn.Exec(query, id)
 	return err
+}
+
+func (db *DB) ensureRunnerImageColumn() {
+	if db.driver == "postgres" {
+		if _, err := db.conn.Exec("ALTER TABLE k6_templates ADD COLUMN IF NOT EXISTS runner_image TEXT;"); err != nil {
+			log.Printf("Warning: failed to migrate runner_image column on k6_templates: %v", err)
+		}
+		return
+	}
+
+	var hasRunnerImage bool
+	riRows, err := db.conn.Query("PRAGMA table_info(k6_templates);")
+	if err == nil {
+		for riRows.Next() {
+			var cid int
+			var name, ctype string
+			var notnull, pk int
+			var dfltVal sql.NullString
+			if err := riRows.Scan(&cid, &name, &ctype, &notnull, &dfltVal, &pk); err == nil {
+				if name == "runner_image" {
+					hasRunnerImage = true
+				}
+			}
+		}
+		riRows.Close()
+	}
+	if !hasRunnerImage {
+		if _, err := db.conn.Exec("ALTER TABLE k6_templates ADD COLUMN runner_image TEXT;"); err != nil {
+			log.Printf("Warning: failed to migrate runner_image column on k6_templates: %v", err)
+		}
+	}
+}
+
+func (db *DB) ensureSlaThresholdsColumn() {
+	if db.driver == "postgres" {
+		if _, err := db.conn.Exec("ALTER TABLE k6_templates ADD COLUMN IF NOT EXISTS sla_thresholds TEXT;"); err != nil {
+			log.Printf("Warning: failed to migrate sla_thresholds column on k6_templates: %v", err)
+		}
+		return
+	}
+
+	var hasSlaThresholds bool
+	tRows, err := db.conn.Query("PRAGMA table_info(k6_templates);")
+	if err == nil {
+		for tRows.Next() {
+			var cid int
+			var name, ctype string
+			var notnull, pk int
+			var dfltVal sql.NullString
+			if err := tRows.Scan(&cid, &name, &ctype, &notnull, &dfltVal, &pk); err == nil {
+				if name == "sla_thresholds" {
+					hasSlaThresholds = true
+				}
+			}
+		}
+		tRows.Close()
+	}
+	if !hasSlaThresholds {
+		if _, err := db.conn.Exec("ALTER TABLE k6_templates ADD COLUMN sla_thresholds TEXT;"); err != nil {
+			log.Printf("Warning: failed to migrate sla_thresholds column on k6_templates: %v", err)
+		}
+	}
+}
+
+func isMissingColumnError(err error, column string) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	col := strings.ToLower(column)
+	return (strings.Contains(msg, "no such column") && strings.Contains(msg, col)) ||
+		strings.Contains(msg, fmt.Sprintf("column \"%s\" does not exist", col)) ||
+		strings.Contains(msg, fmt.Sprintf("has no column named %s", col)) ||
+		strings.Contains(msg, fmt.Sprintf("unknown column '%s'", col))
 }
 
 func (db *DB) SaveUser(u *User) error {
@@ -945,5 +1138,3 @@ func (db *DB) GetAlerts() ([]*TestAlert, error) {
 	}
 	return list, nil
 }
-
-

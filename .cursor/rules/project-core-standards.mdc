@@ -1,0 +1,28 @@
+---
+description: K6 Stratos core conventions index
+alwaysApply: true
+---
+
+# K6 Stratos — Core Standards
+
+Stack: **Next.js 16** frontend, **Go** REST backend, **Kubernetes** + **InfluxDB**.
+
+## Scoped rules
+
+| Area | Rule file | When it applies |
+|---|---|---|
+| Frontend UI text | `i18n-multilingual.mdc` | All user-visible strings in en/fr/he/zh |
+| Backend HA | `backend-ha-leader-election.mdc` | DB workers, scheduler, multi-replica deploy |
+
+## Skills
+
+- API tokens, RBAC, relaunch pipeline → `.cursor/skills/k6-stratum-portal-integrator/SKILL.md`
+- Dashboard observability → `.cursor/skills/k6-bedrock-dashboard/SKILL.md`
+- OpenSpec change workflow → `.cursor/skills/openspec-*/SKILL.md`
+
+## Key paths
+
+- Translations: `frontend/src/components/PreferencesContext.tsx`
+- Backend entry: `backend/cmd/api/main.go`
+- Scheduler: `backend/internal/server/scheduler.go`
+- K8s deploy: `k8s-deployment.yaml`
