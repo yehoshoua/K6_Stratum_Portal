@@ -7,7 +7,9 @@ async function apiFetch(url: string, options: RequestInit = {}): Promise<Respons
       localStorage.removeItem('token');
       localStorage.removeItem('username');
       localStorage.removeItem('role');
-      window.location.href = '/login';
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
     }
   }
   return res;
@@ -51,9 +53,12 @@ export interface InfluxServerConfig {
   env_defined?: boolean;
 }
 
+export type K6TemplateType = 'cronjob' | 'job' | 'testrun';
+
 export interface K6Template {
   id: string;
   name: string;
+  template_type: K6TemplateType;
   parallelism: number;
   script_name: string;
   script_file: string;
@@ -63,6 +68,11 @@ export interface K6Template {
   script_content: string;
   created_at: string;
   sla_thresholds?: string;
+  schedule_enabled?: boolean;
+  schedule_cron_expression?: string;
+  schedule_active?: boolean;
+  schedule_cluster_id?: string;
+  schedule_namespace?: string;
 }
 
 export interface EcrCheck {

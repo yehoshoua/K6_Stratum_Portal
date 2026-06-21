@@ -35,7 +35,6 @@ function buildCrdPayload(name: string, template: K6Template, isCron: boolean, cr
 		resource_kind: isCron ? 'cronjob' : 'job',
 		active,
 		spec: {
-			parallelism: template.parallelism || 1,
 			script: {
 				configMap: {
 					name: template.script_name,
@@ -66,9 +65,10 @@ function buildCrdPayload(name: string, template: K6Template, isCron: boolean, cr
 
 function findTemplateForWorkload(workload: BatchWorkload, templates: K6Template[]): string {
 	const scriptName = workload.spec?.script?.configMap?.name || '';
-	if (!scriptName) return templates[0]?.id || '';
-	const match = templates.find(t => t.script_name === scriptName);
-	return match?.id || templates[0]?.id || '';
+	const cronjobTemplates = templates.filter(t => t.template_type === 'cronjob');
+	if (!scriptName) return cronjobTemplates[0]?.id || '';
+	const match = cronjobTemplates.find(t => t.script_name === scriptName);
+	return match?.id || cronjobTemplates[0]?.id || '';
 }
 
 export default function SchedulesPage() {
@@ -121,6 +121,9 @@ export default function SchedulesPage() {
 
 	const selectedTemplate = templates.find(tpl => tpl.id === templateId);
 	const editTemplate = templates.find(tpl => tpl.id === editTemplateId);
+	const cronjobTemplates = templates.filter(tpl => tpl.template_type === 'cronjob');
+	const jobTemplates = templates.filter(tpl => tpl.template_type === 'job');
+	const formTemplates = isScheduled ? cronjobTemplates : jobTemplates;
 	const selectedCluster = clusters.find(c => c.id === clusterId);
 
 	const workloadKey = (w: BatchWorkload) =>
@@ -174,7 +177,8 @@ export default function SchedulesPage() {
 				loadNamespaces(clustersData[0].id);
 			}
 			if (templatesData && templatesData.length > 0) {
-				setTemplateId(templatesData[0].id);
+				const defaultTemplate = templatesData.find(t => t.template_type === 'cronjob') || templatesData[0];
+				setTemplateId(defaultTemplate.id);
 			}
 		} catch (err: unknown) {
 			console.error(err);
@@ -198,6 +202,16 @@ export default function SchedulesPage() {
 			loadWorkloads(clusters);
 		}
 	}, [clusters, loadWorkloads]);
+
+	useEffect(() => {
+		if (formTemplates.length === 0) {
+			setTemplateId('');
+			return;
+		}
+		if (!formTemplates.some(tpl => tpl.id === templateId)) {
+			setTemplateId(formTemplates[0].id);
+		}
+	}, [isScheduled, formTemplates, templateId]);
 
 	const loadNamespaces = async (cId: string) => {
 		try {
@@ -284,6 +298,14 @@ export default function SchedulesPage() {
 			setError(t('allFieldsRequired'));
 			return;
 		}
+		if (isScheduled && template.template_type !== 'cronjob') {
+			setError(t('templateTypeCronJobRequired'));
+			return;
+		}
+		if (!isScheduled && template.template_type !== 'job') {
+			setError(t('templateTypeJobRequired'));
+			return;
+		}
 		if (isScheduled) {
 			const fields = getCronFields(cronExpr);
 			if (fields.length !== 5) {
@@ -319,7 +341,7 @@ export default function SchedulesPage() {
 		e.preventDefault();
 		if (!editingWorkload || role === 'viewer') return;
 
-		const template = templates.find(tpl => tpl.id === editTemplateId);
+		const template = cronjobTemplates.find(tpl => tpl.id === editTemplateId);
 		if (!template || !editCronExpr.trim()) {
 			setError(t('allFieldsRequired'));
 			return;
@@ -539,7 +561,7 @@ export default function SchedulesPage() {
 									onChange={(e) => setTemplateId(e.target.value)}
 									className="w-full bg-slate-950/80 border border-slate-850 text-slate-200 px-3 py-2 rounded-xl outline-none focus:border-purple-500/50 transition cursor-pointer"
 								>
-									{templates.map(tpl => (
+									{formTemplates.map(tpl => (
 										<option key={tpl.id} value={tpl.id}>{tpl.name}</option>
 									))}
 								</select>
@@ -793,7 +815,7 @@ export default function SchedulesPage() {
 									onChange={(e) => setEditTemplateId(e.target.value)}
 									className="w-full bg-slate-950/80 border border-slate-850 text-slate-200 px-3 py-2 rounded-xl outline-none focus:border-purple-500/50 transition cursor-pointer"
 								>
-									{templates.map(tpl => (
+									{cronjobTemplates.map(tpl => (
 										<option key={tpl.id} value={tpl.id}>{tpl.name}</option>
 									))}
 								</select>

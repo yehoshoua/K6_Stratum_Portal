@@ -48,13 +48,16 @@ func (s *Server) startScheduleRunner() {
 
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 	states := map[int]*scheduleState{}
+	templateStates := map[string]*scheduleState{}
 	ticker := time.NewTicker(scheduleTickInterval)
 
 	s.processSchedules(parser, states)
+	s.processTemplateSchedules(parser, templateStates)
 
 	go func() {
 		for range ticker.C {
 			s.processSchedules(parser, states)
+			s.processTemplateSchedules(parser, templateStates)
 		}
 	}()
 }
@@ -113,6 +116,76 @@ func (s *Server) processSchedules(parser cron.Parser, states map[int]*scheduleSt
 	}
 }
 
+func (s *Server) processTemplateSchedules(parser cron.Parser, states map[string]*scheduleState) {
+	if s.db == nil {
+		return
+	}
+
+	templates, err := s.db.GetScheduledTemplates()
+	if err != nil {
+		log.Printf("scheduler: failed to list scheduled templates: %v", err)
+		return
+	}
+
+	now := time.Now()
+	activeIDs := make(map[string]struct{}, len(templates))
+	for _, tmpl := range templates {
+		if tmpl == nil {
+			continue
+		}
+		activeIDs[tmpl.ID] = struct{}{}
+
+		if tmpl.ScheduleCronExpression == "" || !tmpl.ScheduleActive {
+			delete(states, tmpl.ID)
+			continue
+		}
+
+		state, ok := states[tmpl.ID]
+		if !ok || state.cronExpr != tmpl.ScheduleCronExpression {
+			parsed, parseErr := parser.Parse(tmpl.ScheduleCronExpression)
+			if parseErr != nil {
+				log.Printf("scheduler: invalid cron for template %s: %v", tmpl.ID, parseErr)
+				delete(states, tmpl.ID)
+				continue
+			}
+			state = &scheduleState{
+				cronExpr: tmpl.ScheduleCronExpression,
+				schedule: parsed,
+				nextRun:  parsed.Next(now),
+			}
+			states[tmpl.ID] = state
+		}
+
+		if !state.nextRun.IsZero() && !state.nextRun.After(now) {
+			ctx, cancel := context.WithTimeout(context.Background(), scheduleRunTimeout)
+			if err := s.runTemplateScheduledTestRun(ctx, tmpl, "template-cron"); err != nil {
+				log.Printf("scheduler: failed to run template schedule %s: %v", tmpl.ID, err)
+			}
+			cancel()
+			state.nextRun = state.schedule.Next(now.Add(time.Second))
+		}
+	}
+
+	for id := range states {
+		if _, ok := activeIDs[id]; !ok {
+			delete(states, id)
+		}
+	}
+}
+
+func (s *Server) runTemplateScheduledTestRun(ctx context.Context, tmpl *database.K6Template, runSource string) error {
+	if tmpl == nil {
+		return fmt.Errorf("template is required")
+	}
+	sched := &database.TestSchedule{
+		Name:       tmpl.Name,
+		ClusterID:  tmpl.ScheduleClusterID,
+		Namespace:  tmpl.ScheduleNamespace,
+		TemplateID: tmpl.ID,
+	}
+	return s.runScheduleTestRun(ctx, sched, runSource)
+}
+
 func (s *Server) runScheduleTestRun(ctx context.Context, sched *database.TestSchedule, runSource string) error {
 	if sched == nil {
 		return fmt.Errorf("schedule is required")
@@ -135,6 +208,13 @@ func (s *Server) runScheduleTestRun(ctx context.Context, sched *database.TestSch
 	template, err := s.db.GetTemplate(sched.TemplateID)
 	if err != nil || template == nil {
 		return fmt.Errorf("template not found")
+	}
+	templateType := strings.ToLower(strings.TrimSpace(template.TemplateType))
+	if templateType == "" {
+		templateType = database.TemplateTypeTestRun
+	}
+	if templateType != database.TemplateTypeTestRun {
+		return fmt.Errorf("only testrun templates can create scheduled TestRuns")
 	}
 
 	clusterConfig := s.getClusterConfig(sched.ClusterID)

@@ -917,25 +917,9 @@ func (s *Server) handleCreateCRD(w http.ResponseWriter, r *http.Request) {
 		}
 
 		cmClient := client.Clientset.CoreV1().ConfigMaps(namespace)
-		existing, getErr := cmClient.Get(r.Context(), configMapName, metav1.GetOptions{})
-		if getErr != nil {
-			if apierrors.IsNotFound(getErr) {
-				_, err = cmClient.Create(r.Context(), cm, metav1.CreateOptions{})
-				if err != nil {
-					http.Error(w, fmt.Sprintf(`{"error":"failed to create ConfigMap: %v"}`, err), http.StatusInternalServerError)
-					return
-				}
-			} else {
-				http.Error(w, fmt.Sprintf(`{"error":"failed to fetch ConfigMap: %v"}`, getErr), http.StatusInternalServerError)
-				return
-			}
-		} else {
-			cm.ResourceVersion = existing.ResourceVersion
-			_, err = cmClient.Update(r.Context(), cm, metav1.UpdateOptions{})
-			if err != nil {
-				http.Error(w, fmt.Sprintf(`{"error":"failed to update ConfigMap: %v"}`, err), http.StatusInternalServerError)
-				return
-			}
+		if err := applyConfigMap(r.Context(), cmClient, cm); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"failed to apply ConfigMap: %v"}`, err), http.StatusInternalServerError)
+			return
 		}
 	}
 
@@ -1002,12 +986,14 @@ func (s *Server) handleCreateCRD(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var parallelismVal int32 = 1
-	if specMap != nil {
+	if resourceKind == "testrun" && specMap != nil {
 		if p, ok := specMap["parallelism"].(float64); ok {
 			parallelismVal = int32(p)
 		} else if p, ok := specMap["parallelism"].(int); ok {
 			parallelismVal = int32(p)
 		}
+	} else if resourceKind != "testrun" {
+		parallelismVal = 1
 	}
 
 	image := "grafana/k6:latest"
@@ -2880,38 +2866,19 @@ func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body struct {
-		Name          string `json:"name"`
-		Parallelism   int    `json:"parallelism"`
-		ScriptName    string `json:"script_name"`
-		ScriptFile    string `json:"script_file"`
-		RunnerImage   string `json:"runner_image"`
-		CPULimit      string `json:"cpu_limit"`
-		MemLimit      string `json:"mem_limit"`
-		ScriptContent string `json:"script_content"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
-		return
-	}
-
-	if body.Name == "" || body.ScriptName == "" || body.ScriptFile == "" || body.ScriptContent == "" {
-		http.Error(w, `{"error":"missing required fields"}`, http.StatusBadRequest)
+	newTemplate, err := decodeK6TemplateBody(r)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%v"}`, err), http.StatusBadRequest)
 		return
 	}
 
 	id := fmt.Sprintf("tmpl-%d", time.Now().UnixNano())
-	newTemplate := &database.K6Template{
-		ID:            id,
-		Name:          body.Name,
-		Parallelism:   body.Parallelism,
-		ScriptName:    body.ScriptName,
-		ScriptFile:    body.ScriptFile,
-		RunnerImage:   body.RunnerImage,
-		CPULimit:      body.CPULimit,
-		MemLimit:      body.MemLimit,
-		ScriptContent: body.ScriptContent,
-		CreatedAt:     time.Now(),
+	newTemplate.ID = id
+	newTemplate.CreatedAt = time.Now()
+
+	if err := validateK6Template(newTemplate); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%v"}`, err), http.StatusBadRequest)
+		return
 	}
 
 	if err := s.db.SaveTemplate(newTemplate); err != nil {
@@ -2934,37 +2901,18 @@ func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body struct {
-		Name          string `json:"name"`
-		Parallelism   int    `json:"parallelism"`
-		ScriptName    string `json:"script_name"`
-		ScriptFile    string `json:"script_file"`
-		RunnerImage   string `json:"runner_image"`
-		CPULimit      string `json:"cpu_limit"`
-		MemLimit      string `json:"mem_limit"`
-		ScriptContent string `json:"script_content"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+	updatedTemplate, err := decodeK6TemplateBody(r)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%v"}`, err), http.StatusBadRequest)
 		return
 	}
 
-	if body.Name == "" || body.ScriptName == "" || body.ScriptFile == "" || body.ScriptContent == "" {
-		http.Error(w, `{"error":"missing required fields"}`, http.StatusBadRequest)
-		return
-	}
+	updatedTemplate.ID = id
+	updatedTemplate.CreatedAt = time.Now()
 
-	updatedTemplate := &database.K6Template{
-		ID:            id,
-		Name:          body.Name,
-		Parallelism:   body.Parallelism,
-		ScriptName:    body.ScriptName,
-		ScriptFile:    body.ScriptFile,
-		RunnerImage:   body.RunnerImage,
-		CPULimit:      body.CPULimit,
-		MemLimit:      body.MemLimit,
-		ScriptContent: body.ScriptContent,
-		CreatedAt:     time.Now(),
+	if err := validateK6Template(updatedTemplate); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%v"}`, err), http.StatusBadRequest)
+		return
 	}
 
 	if err := s.db.SaveTemplate(updatedTemplate); err != nil {
@@ -2974,6 +2922,47 @@ func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(updatedTemplate)
+}
+
+func decodeK6TemplateBody(r *http.Request) (*database.K6Template, error) {
+	var body struct {
+		Name                   string `json:"name"`
+		TemplateType           string `json:"template_type"`
+		Parallelism            int    `json:"parallelism"`
+		ScriptName             string `json:"script_name"`
+		ScriptFile             string `json:"script_file"`
+		RunnerImage            string `json:"runner_image"`
+		CPULimit               string `json:"cpu_limit"`
+		MemLimit               string `json:"mem_limit"`
+		ScriptContent          string `json:"script_content"`
+		ScheduleEnabled        bool   `json:"schedule_enabled"`
+		ScheduleCronExpression string `json:"schedule_cron_expression"`
+		ScheduleActive         bool   `json:"schedule_active"`
+		ScheduleClusterID      string `json:"schedule_cluster_id"`
+		ScheduleNamespace      string `json:"schedule_namespace"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("invalid request body")
+	}
+	if body.TemplateType == "" {
+		return nil, fmt.Errorf("template_type is required")
+	}
+	return &database.K6Template{
+		Name:                   body.Name,
+		TemplateType:           body.TemplateType,
+		Parallelism:            body.Parallelism,
+		ScriptName:             body.ScriptName,
+		ScriptFile:             body.ScriptFile,
+		RunnerImage:            body.RunnerImage,
+		CPULimit:               body.CPULimit,
+		MemLimit:               body.MemLimit,
+		ScriptContent:          body.ScriptContent,
+		ScheduleEnabled:        body.ScheduleEnabled,
+		ScheduleCronExpression: body.ScheduleCronExpression,
+		ScheduleActive:         body.ScheduleActive,
+		ScheduleClusterID:      body.ScheduleClusterID,
+		ScheduleNamespace:      body.ScheduleNamespace,
+	}, nil
 }
 
 func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
@@ -3597,6 +3586,11 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := validateTestRunTemplateReference(s.db, sched.TemplateID); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%v"}`, err), http.StatusBadRequest)
+		return
+	}
+
 	isScheduled := sched.CronExpression != ""
 	if isScheduled {
 		if len(strings.Fields(sched.CronExpression)) != 5 {
@@ -3646,6 +3640,11 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 
 	if sched.Name == "" || sched.ClusterID == "" || sched.Namespace == "" || sched.TemplateID == "" {
 		http.Error(w, `{"error":"all fields except cron expression are required"}`, http.StatusBadRequest)
+		return
+	}
+
+	if err := validateTestRunTemplateReference(s.db, sched.TemplateID); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%v"}`, err), http.StatusBadRequest)
 		return
 	}
 

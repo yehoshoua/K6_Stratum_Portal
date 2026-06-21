@@ -17,7 +17,7 @@ import {
   Users,
   Key
 } from 'lucide-react';
-import { api, ClusterConfig, InfluxServerConfig, K6Template, User, SSOConfig, APIToken, RunDefaults } from '@/services/api';
+import { api, ClusterConfig, InfluxServerConfig, K6Template, K6TemplateType, User, SSOConfig, APIToken, RunDefaults } from '@/services/api';
 import { RUNNER_IMAGE_PLACEHOLDER } from '@/utils/clusterImage';
 import { usePreferences, defaultPalettes, CustomPalette } from '@/components/PreferencesContext';
 
@@ -471,14 +471,45 @@ export default function () {
 
   const [templateConfig, setTemplateConfig] = useState({
     name: '',
+    template_type: 'testrun' as K6TemplateType,
     parallelism: 1,
     script_name: 'k6-test-script',
     script_file: 'test.js',
     runner_image: '',
     cpu_limit: '10m',
     mem_limit: '16Mi',
-    script_content: DEFAULT_SCRIPT_TEMPLATE
+    script_content: DEFAULT_SCRIPT_TEMPLATE,
+    schedule_enabled: false,
+    schedule_cron_expression: '0 11 * * *',
+    schedule_active: true,
+    schedule_cluster_id: '',
+    schedule_namespace: 'default',
   });
+  const [templateScheduleNamespaces, setTemplateScheduleNamespaces] = useState<string[]>(['default']);
+
+  const templateTypeLabel = (type: K6TemplateType | string) => {
+    switch (type) {
+      case 'cronjob':
+        return t('templateTypeCronJob');
+      case 'job':
+        return t('templateTypeJob');
+      default:
+        return t('templateTypeTestRun');
+    }
+  };
+
+  const loadTemplateScheduleNamespaces = async (clusterId: string) => {
+    if (!clusterId) {
+      setTemplateScheduleNamespaces(['default']);
+      return;
+    }
+    try {
+      const ns = await api.getNamespaces(clusterId);
+      setTemplateScheduleNamespaces(ns?.length ? ns : ['default']);
+    } catch {
+      setTemplateScheduleNamespaces(['default']);
+    }
+  };
 
   const loadTemplates = async () => {
     try {
@@ -495,16 +526,26 @@ export default function () {
   const handleStartAddTemplate = () => {
     setIsEditingTemplate(false);
     setEditingTemplateId(null);
+    const defaultClusterId = clusters[0]?.id || '';
     setTemplateConfig({
       name: '',
+      template_type: 'testrun',
       parallelism: 1,
       script_name: 'k6-test-script',
       script_file: 'test.js',
       runner_image: '',
       cpu_limit: '10m',
       mem_limit: '16Mi',
-      script_content: DEFAULT_SCRIPT_TEMPLATE
+      script_content: DEFAULT_SCRIPT_TEMPLATE,
+      schedule_enabled: false,
+      schedule_cron_expression: '0 11 * * *',
+      schedule_active: true,
+      schedule_cluster_id: defaultClusterId,
+      schedule_namespace: 'default',
     });
+    if (defaultClusterId) {
+      loadTemplateScheduleNamespaces(defaultClusterId);
+    }
     setTemplateError('');
     setIsTemplateModalOpen(true);
   };
@@ -514,14 +555,23 @@ export default function () {
     setEditingTemplateId(tmpl.id);
     setTemplateConfig({
       name: tmpl.name,
-      parallelism: tmpl.parallelism,
+      template_type: tmpl.template_type || 'testrun',
+      parallelism: tmpl.parallelism || 1,
       script_name: tmpl.script_name,
       script_file: tmpl.script_file,
       runner_image: tmpl.runner_image || '',
       cpu_limit: tmpl.cpu_limit,
       mem_limit: tmpl.mem_limit,
-      script_content: tmpl.script_content
+      script_content: tmpl.script_content,
+      schedule_enabled: tmpl.schedule_enabled || false,
+      schedule_cron_expression: tmpl.schedule_cron_expression || '0 11 * * *',
+      schedule_active: tmpl.schedule_active !== false,
+      schedule_cluster_id: tmpl.schedule_cluster_id || clusters[0]?.id || '',
+      schedule_namespace: tmpl.schedule_namespace || 'default',
     });
+    if (tmpl.schedule_cluster_id || clusters[0]?.id) {
+      loadTemplateScheduleNamespaces(tmpl.schedule_cluster_id || clusters[0]?.id || '');
+    }
     setTemplateError('');
     setIsTemplateModalOpen(true);
   };
@@ -1462,7 +1512,12 @@ export default function () {
                       <FileCode2 className="w-4 h-4" />
                     </div>
                     <div className="min-w-0">
-                      <p className="text-xs font-semibold text-slate-200 truncate">{tmpl.name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-xs font-semibold text-slate-200 truncate">{tmpl.name}</p>
+                        <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-300 border border-purple-500/20 shrink-0">
+                          {templateTypeLabel(tmpl.template_type || 'testrun')}
+                        </span>
+                      </div>
                       <p className="text-[10px] text-slate-500 font-mono truncate">{tmpl.script_name} ({tmpl.script_file})</p>
                       {tmpl.runner_image && (
                         <p className="text-[10px] text-slate-500 font-mono truncate">{t('runnerImage')}: {tmpl.runner_image}</p>
@@ -1488,11 +1543,13 @@ export default function () {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-2 text-[10px] bg-slate-950/60 p-3 rounded-xl border border-slate-900 text-slate-400 font-medium">
-                  <div>
-                    <span className="text-slate-500 block text-[8px] uppercase tracking-wider">{t('parallelism')}</span>
-                    <span className="text-slate-300 font-semibold">{tmpl.parallelism} {t('runners')}</span>
-                  </div>
+                <div className={`grid gap-2 text-[10px] bg-slate-950/60 p-3 rounded-xl border border-slate-900 text-slate-400 font-medium ${tmpl.template_type === 'testrun' ? 'grid-cols-3' : 'grid-cols-2'}`}>
+                  {tmpl.template_type === 'testrun' && (
+                    <div>
+                      <span className="text-slate-500 block text-[8px] uppercase tracking-wider">{t('parallelism')}</span>
+                      <span className="text-slate-300 font-semibold">{tmpl.parallelism} {t('runners')}</span>
+                    </div>
+                  )}
                   <div>
                     <span className="text-slate-500 block text-[8px] uppercase tracking-wider">{t('cpuLimit')}</span>
                     <span className="text-slate-300 font-semibold">{tmpl.cpu_limit}</span>
@@ -2180,6 +2237,27 @@ export default function () {
 
             <form onSubmit={handleSaveTemplateConfig} className="space-y-4">
               <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('templateType')}</label>
+                <select
+                  value={templateConfig.template_type}
+                  onChange={(e) => {
+                    const nextType = e.target.value as K6TemplateType;
+                    setTemplateConfig({
+                      ...templateConfig,
+                      template_type: nextType,
+                      parallelism: nextType === 'testrun' ? Math.max(templateConfig.parallelism || 1, 1) : 0,
+                      schedule_enabled: nextType === 'testrun' ? templateConfig.schedule_enabled : false,
+                    });
+                  }}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:border-purple-500 outline-none"
+                >
+                  <option value="testrun">{t('templateTypeTestRun')}</option>
+                  <option value="cronjob">{t('templateTypeCronJob')}</option>
+                  <option value="job">{t('templateTypeJob')}</option>
+                </select>
+              </div>
+
+              <div>
                 <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('templateName')}</label>
                 <input
                   type="text"
@@ -2191,19 +2269,21 @@ export default function () {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('parallelism')}</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={50}
-                    required
-                    value={templateConfig.parallelism}
-                    onChange={(e) => setTemplateConfig({ ...templateConfig, parallelism: Number(e.target.value) })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:border-purple-500 outline-none"
-                  />
-                </div>
+              <div className={`grid gap-4 ${templateConfig.template_type === 'testrun' ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                {templateConfig.template_type === 'testrun' && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('parallelism')}</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={50}
+                      required
+                      value={templateConfig.parallelism}
+                      onChange={(e) => setTemplateConfig({ ...templateConfig, parallelism: Number(e.target.value) })}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:border-purple-500 outline-none"
+                    />
+                  </div>
+                )}
                 <div>
                   <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('scriptConfigMapName')}</label>
                   <input
@@ -2267,7 +2347,6 @@ export default function () {
               <div>
                 <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('jsScriptContent')}</label>
                 <textarea
-                  required
                   rows={6}
                   value={templateConfig.script_content}
                   onChange={(e) => setTemplateConfig({ ...templateConfig, script_content: e.target.value })}
@@ -2275,6 +2354,81 @@ export default function () {
                   placeholder="import http from 'k6/http'; ..."
                 />
               </div>
+
+              {templateConfig.template_type === 'testrun' && (
+                <div className="space-y-3 border border-slate-800 rounded-2xl p-4 bg-slate-950/40">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-semibold text-slate-300">{t('templateScheduleSection')}</p>
+                      <p className="text-[10px] text-slate-500">{t('templateScheduleSectionDesc')}</p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={templateConfig.schedule_enabled}
+                      onChange={(e) => setTemplateConfig({ ...templateConfig, schedule_enabled: e.target.checked })}
+                      className="w-4 h-4 accent-purple-500"
+                    />
+                  </div>
+
+                  {templateConfig.schedule_enabled && (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('cronExpression')}</label>
+                        <input
+                          type="text"
+                          required
+                          value={templateConfig.schedule_cron_expression}
+                          onChange={(e) => setTemplateConfig({ ...templateConfig, schedule_cron_expression: e.target.value })}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:border-purple-500 outline-none font-mono"
+                        />
+                        <p className="text-[10px] text-slate-500 mt-1">{t('cronRoundHourError')}</p>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('templateScheduleCluster')}</label>
+                          <select
+                            required
+                            value={templateConfig.schedule_cluster_id}
+                            onChange={(e) => {
+                              const clusterId = e.target.value;
+                              setTemplateConfig({ ...templateConfig, schedule_cluster_id: clusterId, schedule_namespace: 'default' });
+                              loadTemplateScheduleNamespaces(clusterId);
+                            }}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:border-purple-500 outline-none"
+                          >
+                            <option value="">{t('clusterLabel')}</option>
+                            {clusters.map(c => (
+                              <option key={c.id} value={c.id}>{c.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('templateScheduleNamespace')}</label>
+                          <select
+                            required
+                            value={templateConfig.schedule_namespace}
+                            onChange={(e) => setTemplateConfig({ ...templateConfig, schedule_namespace: e.target.value })}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:border-purple-500 outline-none"
+                          >
+                            {templateScheduleNamespaces.map(ns => (
+                              <option key={ns} value={ns}>{ns}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                      <label className="flex items-center gap-2 text-xs text-slate-300">
+                        <input
+                          type="checkbox"
+                          checked={templateConfig.schedule_active}
+                          onChange={(e) => setTemplateConfig({ ...templateConfig, schedule_active: e.target.checked })}
+                          className="w-4 h-4 accent-purple-500"
+                        />
+                        {t('templateScheduleActive')}
+                      </label>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="flex space-x-3 pt-4">
                 <button

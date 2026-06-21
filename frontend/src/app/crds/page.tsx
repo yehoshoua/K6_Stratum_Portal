@@ -670,12 +670,14 @@ export default function () {
           }))
           .filter((entry) => entry.name !== '')
       : [];
-    const defaultEnvVars = (existingEnvVars.length > 0 ? existingEnvVars : (runDefaults.env_vars || []))
-      .map(({ key, value, name }) => ({
-        name: (name || key || '').trim(),
-        value: value ?? '',
-      }))
-      .filter(entry => entry.name !== '');
+    const defaultEnvVars = existingEnvVars.length > 0
+      ? existingEnvVars
+      : (runDefaults.env_vars || [])
+          .map(({ key, value }) => ({
+            name: (key || '').trim(),
+            value: value ?? '',
+          }))
+          .filter(entry => entry.name !== '');
 
     const specBody: any = {
       name: newRun.name,
@@ -735,6 +737,7 @@ export default function () {
 
           const createdTemplate = await api.createTemplate({
             name: newRun.name,
+            template_type: 'testrun',
             parallelism: Number(newRun.parallelism),
             script_name: derivedScriptName,
             script_file: derivedScriptFile,
@@ -1355,7 +1358,7 @@ export default function () {
             {/* Scrollable form body */}
             <form onSubmit={handleCreateCRD} className="flex flex-col flex-1 min-h-0">
               <div className="overflow-y-auto flex-1 px-8 py-4 space-y-4">
-              {templates.length > 0 && (
+              {templates.filter(t => t.template_type === 'testrun').length > 0 && (
                 <div className="animate-fadeIn">
                   <label className="block text-xs font-semibold text-slate-400 mb-1.5">{t('k6Template')}</label>
                   <select
@@ -1380,7 +1383,7 @@ export default function () {
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-300 outline-none focus:border-purple-500 font-semibold"
                   >
                     <option value="">-- {t('k6Template')} --</option>
-                    {templates.map(t => (
+                    {templates.filter(t => t.template_type === 'testrun').map(t => (
                       <option key={t.id} value={t.id}>{t.name}</option>
                     ))}
                   </select>

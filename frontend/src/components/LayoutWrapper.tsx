@@ -10,20 +10,25 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   const router = useRouter();
   const { lang, t } = usePreferences();
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const isLoginPage = pathname === '/login';
 
   useEffect(() => {
+    if (isLoginPage) return;
+
     const token = localStorage.getItem('token');
-    
-    if (!token && pathname !== '/login') {
+
+    if (!token) {
       setIsAuthenticated(false);
-      router.push('/login');
+      router.replace('/login');
     } else {
       setIsAuthenticated(true);
-      if (token && pathname === '/login') {
-        router.push('/');
-      }
     }
-  }, [pathname, router]);
+  }, [isLoginPage, pathname, router]);
+
+  // Login page renders immediately — no auth gate (avoids loading flash + redirect bounce)
+  if (isLoginPage) {
+    return <>{children}</>;
+  }
 
   // Loading state while verifying auth
   if (isAuthenticated === null) {
@@ -32,11 +37,6 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
         {t('portalLoading')}
       </div>
     );
-  }
-
-  // Login page layout (no sidebar, no wrapper)
-  if (pathname === '/login') {
-    return <>{children}</>;
   }
 
   return (

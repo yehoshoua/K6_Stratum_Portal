@@ -50,18 +50,30 @@ type InfluxConfig struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+const (
+	TemplateTypeCronJob = "cronjob"
+	TemplateTypeJob     = "job"
+	TemplateTypeTestRun = "testrun"
+)
+
 type K6Template struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	Parallelism   int       `json:"parallelism"`
-	ScriptName    string    `json:"script_name"`
-	ScriptFile    string    `json:"script_file"`
-	RunnerImage   string    `json:"runner_image"`
-	CPULimit      string    `json:"cpu_limit"`
-	MemLimit      string    `json:"mem_limit"`
-	ScriptContent string    `json:"script_content"`
-	CreatedAt     time.Time `json:"created_at"`
-	SLAThresholds string    `json:"sla_thresholds,omitempty"`
+	ID                     string    `json:"id"`
+	Name                   string    `json:"name"`
+	TemplateType           string    `json:"template_type"`
+	Parallelism            int       `json:"parallelism"`
+	ScriptName             string    `json:"script_name"`
+	ScriptFile             string    `json:"script_file"`
+	RunnerImage            string    `json:"runner_image"`
+	CPULimit               string    `json:"cpu_limit"`
+	MemLimit               string    `json:"mem_limit"`
+	ScriptContent          string    `json:"script_content"`
+	CreatedAt              time.Time `json:"created_at"`
+	SLAThresholds          string    `json:"sla_thresholds,omitempty"`
+	ScheduleEnabled        bool      `json:"schedule_enabled"`
+	ScheduleCronExpression string    `json:"schedule_cron_expression"`
+	ScheduleActive         bool      `json:"schedule_active"`
+	ScheduleClusterID      string    `json:"schedule_cluster_id"`
+	ScheduleNamespace      string    `json:"schedule_namespace"`
 }
 
 type TestSchedule struct {
@@ -193,6 +205,7 @@ func (db *DB) createTables() error {
 	CREATE TABLE IF NOT EXISTS k6_templates (
 		id TEXT PRIMARY KEY,
 		name TEXT NOT NULL,
+		template_type TEXT NOT NULL DEFAULT 'testrun',
 		parallelism INTEGER NOT NULL,
 		script_name TEXT NOT NULL,
 		script_file TEXT NOT NULL,
@@ -201,7 +214,12 @@ func (db *DB) createTables() error {
 		mem_limit TEXT NOT NULL,
 		script_content TEXT NOT NULL,
 		created_at TIMESTAMP NOT NULL,
-		sla_thresholds TEXT
+		sla_thresholds TEXT,
+		schedule_enabled INTEGER NOT NULL DEFAULT 0,
+		schedule_cron_expression TEXT NOT NULL DEFAULT '',
+		schedule_active INTEGER NOT NULL DEFAULT 1,
+		schedule_cluster_id TEXT NOT NULL DEFAULT '',
+		schedule_namespace TEXT NOT NULL DEFAULT ''
 	);`
 
 	usersTable := `
@@ -250,6 +268,7 @@ func (db *DB) createTables() error {
 	if _, err := db.conn.Exec(templatesTable); err != nil {
 		return fmt.Errorf("failed to create k6_templates table: %w", err)
 	}
+	db.ensureTypedTemplateColumns()
 
 	if _, err := db.conn.Exec(usersTable); err != nil {
 		return fmt.Errorf("failed to create users table: %w", err)
@@ -621,13 +640,23 @@ func (db *DB) GetActiveInfluxConfig() (*InfluxConfig, error) {
 }
 
 func (db *DB) SaveTemplate(t *K6Template) error {
+	db.ensureTypedTemplateColumns()
+	if t.TemplateType == "" {
+		t.TemplateType = TemplateTypeTestRun
+	}
+
 	var query string
 	if db.driver == "postgres" {
 		query = `
-		INSERT INTO k6_templates (id, name, parallelism, script_name, script_file, runner_image, cpu_limit, mem_limit, script_content, created_at, sla_thresholds)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO k6_templates (
+			id, name, template_type, parallelism, script_name, script_file, runner_image, cpu_limit, mem_limit,
+			script_content, created_at, sla_thresholds, schedule_enabled, schedule_cron_expression,
+			schedule_active, schedule_cluster_id, schedule_namespace
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
+			template_type = EXCLUDED.template_type,
 			parallelism = EXCLUDED.parallelism,
 			script_name = EXCLUDED.script_name,
 			script_file = EXCLUDED.script_file,
@@ -636,61 +665,49 @@ func (db *DB) SaveTemplate(t *K6Template) error {
 			mem_limit = EXCLUDED.mem_limit,
 			script_content = EXCLUDED.script_content,
 			created_at = EXCLUDED.created_at,
-			sla_thresholds = EXCLUDED.sla_thresholds;`
+			sla_thresholds = EXCLUDED.sla_thresholds,
+			schedule_enabled = EXCLUDED.schedule_enabled,
+			schedule_cron_expression = EXCLUDED.schedule_cron_expression,
+			schedule_active = EXCLUDED.schedule_active,
+			schedule_cluster_id = EXCLUDED.schedule_cluster_id,
+			schedule_namespace = EXCLUDED.schedule_namespace;`
 	} else {
 		query = `
-		INSERT OR REPLACE INTO k6_templates (id, name, parallelism, script_name, script_file, runner_image, cpu_limit, mem_limit, script_content, created_at, sla_thresholds)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
-	}
-	_, err := db.conn.Exec(query, t.ID, t.Name, t.Parallelism, t.ScriptName, t.ScriptFile, t.RunnerImage, t.CPULimit, t.MemLimit, t.ScriptContent, t.CreatedAt, t.SLAThresholds)
-	if err != nil && (isMissingColumnError(err, "runner_image") || isMissingColumnError(err, "sla_thresholds")) {
-		db.ensureRunnerImageColumn()
-		db.ensureSlaThresholdsColumn()
-		_, err = db.conn.Exec(query, t.ID, t.Name, t.Parallelism, t.ScriptName, t.ScriptFile, t.RunnerImage, t.CPULimit, t.MemLimit, t.ScriptContent, t.CreatedAt, t.SLAThresholds)
-	}
-	if err == nil {
-		return nil
+		INSERT OR REPLACE INTO k6_templates (
+			id, name, template_type, parallelism, script_name, script_file, runner_image, cpu_limit, mem_limit,
+			script_content, created_at, sla_thresholds, schedule_enabled, schedule_cron_expression,
+			schedule_active, schedule_cluster_id, schedule_namespace
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 	}
 
-	// Final fallback for legacy schemas without runner_image/sla_thresholds columns.
-	if db.driver != "postgres" && (isMissingColumnError(err, "runner_image") || isMissingColumnError(err, "sla_thresholds")) {
-		legacyQuery := `
-		INSERT OR REPLACE INTO k6_templates (id, name, parallelism, script_name, script_file, cpu_limit, mem_limit, script_content, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`
-		_, err = db.conn.Exec(legacyQuery, t.ID, t.Name, t.Parallelism, t.ScriptName, t.ScriptFile, t.CPULimit, t.MemLimit, t.ScriptContent, t.CreatedAt)
+	scheduleEnabled := 0
+	if t.ScheduleEnabled {
+		scheduleEnabled = 1
 	}
+	scheduleActive := 0
+	if t.ScheduleActive {
+		scheduleActive = 1
+	}
+
+	_, err := db.conn.Exec(
+		query,
+		t.ID, t.Name, t.TemplateType, t.Parallelism, t.ScriptName, t.ScriptFile, t.RunnerImage,
+		t.CPULimit, t.MemLimit, t.ScriptContent, t.CreatedAt, t.SLAThresholds,
+		scheduleEnabled, t.ScheduleCronExpression, scheduleActive, t.ScheduleClusterID, t.ScheduleNamespace,
+	)
 	return err
 }
 
 func (db *DB) GetTemplates() ([]*K6Template, error) {
-	queries := []struct {
-		query          string
-		hasRunnerImage bool
-		hasSla         bool
-	}{
-		{db.rebind(`SELECT id, name, parallelism, script_name, script_file, runner_image, cpu_limit, mem_limit, script_content, created_at, sla_thresholds FROM k6_templates ORDER BY created_at DESC;`), true, true},
-		{db.rebind(`SELECT id, name, parallelism, script_name, script_file, cpu_limit, mem_limit, script_content, created_at, sla_thresholds FROM k6_templates ORDER BY created_at DESC;`), false, true},
-		{db.rebind(`SELECT id, name, parallelism, script_name, script_file, runner_image, cpu_limit, mem_limit, script_content, created_at FROM k6_templates ORDER BY created_at DESC;`), true, false},
-		{db.rebind(`SELECT id, name, parallelism, script_name, script_file, cpu_limit, mem_limit, script_content, created_at FROM k6_templates ORDER BY created_at DESC;`), false, false},
-	}
+	db.ensureTypedTemplateColumns()
+	query := db.rebind(`
+		SELECT id, name, template_type, parallelism, script_name, script_file, runner_image, cpu_limit, mem_limit,
+			script_content, created_at, sla_thresholds, schedule_enabled, schedule_cron_expression,
+			schedule_active, schedule_cluster_id, schedule_namespace
+		FROM k6_templates ORDER BY created_at DESC;`)
 
-	var (
-		rows           *sql.Rows
-		err            error
-		hasRunnerImage bool
-		hasSla         bool
-	)
-	for _, candidate := range queries {
-		rows, err = db.conn.Query(candidate.query)
-		if err != nil && (isMissingColumnError(err, "runner_image") || isMissingColumnError(err, "sla_thresholds")) {
-			continue
-		}
-		if err == nil {
-			hasRunnerImage = candidate.hasRunnerImage
-			hasSla = candidate.hasSla
-		}
-		break
-	}
+	rows, err := db.conn.Query(query)
 	if err != nil {
 		return nil, err
 	}
@@ -698,78 +715,74 @@ func (db *DB) GetTemplates() ([]*K6Template, error) {
 
 	list := make([]*K6Template, 0)
 	for rows.Next() {
-		var t K6Template
-		var slaNull sql.NullString
-		var runnerNull sql.NullString
-		var scanErr error
-		switch {
-		case hasRunnerImage && hasSla:
-			scanErr = rows.Scan(&t.ID, &t.Name, &t.Parallelism, &t.ScriptName, &t.ScriptFile, &runnerNull, &t.CPULimit, &t.MemLimit, &t.ScriptContent, &t.CreatedAt, &slaNull)
-		case hasRunnerImage && !hasSla:
-			scanErr = rows.Scan(&t.ID, &t.Name, &t.Parallelism, &t.ScriptName, &t.ScriptFile, &runnerNull, &t.CPULimit, &t.MemLimit, &t.ScriptContent, &t.CreatedAt)
-		case !hasRunnerImage && hasSla:
-			scanErr = rows.Scan(&t.ID, &t.Name, &t.Parallelism, &t.ScriptName, &t.ScriptFile, &t.CPULimit, &t.MemLimit, &t.ScriptContent, &t.CreatedAt, &slaNull)
-		default:
-			scanErr = rows.Scan(&t.ID, &t.Name, &t.Parallelism, &t.ScriptName, &t.ScriptFile, &t.CPULimit, &t.MemLimit, &t.ScriptContent, &t.CreatedAt)
-		}
+		t, scanErr := scanK6Template(rows)
 		if scanErr != nil {
 			return nil, scanErr
 		}
-		if slaNull.Valid {
-			t.SLAThresholds = slaNull.String
-		}
-		if runnerNull.Valid {
-			t.RunnerImage = runnerNull.String
-		}
-		list = append(list, &t)
+		list = append(list, t)
 	}
 	return list, nil
 }
 
 func (db *DB) GetTemplate(id string) (*K6Template, error) {
-	queries := []struct {
-		query          string
-		hasRunnerImage bool
-		hasSla         bool
-	}{
-		{db.rebind(`SELECT id, name, parallelism, script_name, script_file, runner_image, cpu_limit, mem_limit, script_content, created_at, sla_thresholds FROM k6_templates WHERE id = ? LIMIT 1;`), true, true},
-		{db.rebind(`SELECT id, name, parallelism, script_name, script_file, cpu_limit, mem_limit, script_content, created_at, sla_thresholds FROM k6_templates WHERE id = ? LIMIT 1;`), false, true},
-		{db.rebind(`SELECT id, name, parallelism, script_name, script_file, runner_image, cpu_limit, mem_limit, script_content, created_at FROM k6_templates WHERE id = ? LIMIT 1;`), true, false},
-		{db.rebind(`SELECT id, name, parallelism, script_name, script_file, cpu_limit, mem_limit, script_content, created_at FROM k6_templates WHERE id = ? LIMIT 1;`), false, false},
-	}
+	db.ensureTypedTemplateColumns()
+	query := db.rebind(`
+		SELECT id, name, template_type, parallelism, script_name, script_file, runner_image, cpu_limit, mem_limit,
+			script_content, created_at, sla_thresholds, schedule_enabled, schedule_cron_expression,
+			schedule_active, schedule_cluster_id, schedule_namespace
+		FROM k6_templates WHERE id = ? LIMIT 1;`)
 
-	var (
-		t              K6Template
-		slaNull        sql.NullString
-		runnerNull     sql.NullString
-		err            error
-		hasRunnerImage bool
-		hasSla         bool
-	)
-	for _, candidate := range queries {
-		switch {
-		case candidate.hasRunnerImage && candidate.hasSla:
-			err = db.conn.QueryRow(candidate.query, id).Scan(&t.ID, &t.Name, &t.Parallelism, &t.ScriptName, &t.ScriptFile, &runnerNull, &t.CPULimit, &t.MemLimit, &t.ScriptContent, &t.CreatedAt, &slaNull)
-		case candidate.hasRunnerImage && !candidate.hasSla:
-			err = db.conn.QueryRow(candidate.query, id).Scan(&t.ID, &t.Name, &t.Parallelism, &t.ScriptName, &t.ScriptFile, &runnerNull, &t.CPULimit, &t.MemLimit, &t.ScriptContent, &t.CreatedAt)
-		case !candidate.hasRunnerImage && candidate.hasSla:
-			err = db.conn.QueryRow(candidate.query, id).Scan(&t.ID, &t.Name, &t.Parallelism, &t.ScriptName, &t.ScriptFile, &t.CPULimit, &t.MemLimit, &t.ScriptContent, &t.CreatedAt, &slaNull)
-		default:
-			err = db.conn.QueryRow(candidate.query, id).Scan(&t.ID, &t.Name, &t.Parallelism, &t.ScriptName, &t.ScriptFile, &t.CPULimit, &t.MemLimit, &t.ScriptContent, &t.CreatedAt)
-		}
-		if err != nil && (isMissingColumnError(err, "runner_image") || isMissingColumnError(err, "sla_thresholds")) {
-			continue
-		}
-		if err == nil {
-			hasRunnerImage = candidate.hasRunnerImage
-			hasSla = candidate.hasSla
-		}
-		break
-	}
+	rows, err := db.conn.Query(query, id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
+		return nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, nil
+	}
+	return scanK6Template(rows)
+}
+
+func (db *DB) GetScheduledTemplates() ([]*K6Template, error) {
+	db.ensureTypedTemplateColumns()
+	query := db.rebind(`
+		SELECT id, name, template_type, parallelism, script_name, script_file, runner_image, cpu_limit, mem_limit,
+			script_content, created_at, sla_thresholds, schedule_enabled, schedule_cron_expression,
+			schedule_active, schedule_cluster_id, schedule_namespace
+		FROM k6_templates
+		WHERE schedule_enabled = 1 AND template_type = ?
+		ORDER BY created_at DESC;`)
+
+	rows, err := db.conn.Query(query, TemplateTypeTestRun)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	list := make([]*K6Template, 0)
+	for rows.Next() {
+		t, scanErr := scanK6Template(rows)
+		if scanErr != nil {
+			return nil, scanErr
 		}
+		list = append(list, t)
+	}
+	return list, nil
+}
+
+func scanK6Template(scanner interface {
+	Scan(dest ...any) error
+}) (*K6Template, error) {
+	var t K6Template
+	var slaNull sql.NullString
+	var runnerNull sql.NullString
+	var scheduleEnabledVal int
+	var scheduleActiveVal int
+	if err := scanner.Scan(
+		&t.ID, &t.Name, &t.TemplateType, &t.Parallelism, &t.ScriptName, &t.ScriptFile, &runnerNull,
+		&t.CPULimit, &t.MemLimit, &t.ScriptContent, &t.CreatedAt, &slaNull,
+		&scheduleEnabledVal, &t.ScheduleCronExpression, &scheduleActiveVal, &t.ScheduleClusterID, &t.ScheduleNamespace,
+	); err != nil {
 		return nil, err
 	}
 	if slaNull.Valid {
@@ -778,11 +791,10 @@ func (db *DB) GetTemplate(id string) (*K6Template, error) {
 	if runnerNull.Valid {
 		t.RunnerImage = runnerNull.String
 	}
-	if !hasRunnerImage {
-		t.RunnerImage = ""
-	}
-	if !hasSla {
-		t.SLAThresholds = ""
+	t.ScheduleEnabled = scheduleEnabledVal == 1
+	t.ScheduleActive = scheduleActiveVal == 1
+	if t.TemplateType == "" {
+		t.TemplateType = TemplateTypeTestRun
 	}
 	return &t, nil
 }
@@ -852,6 +864,59 @@ func (db *DB) ensureSlaThresholdsColumn() {
 		if _, err := db.conn.Exec("ALTER TABLE k6_templates ADD COLUMN sla_thresholds TEXT;"); err != nil {
 			log.Printf("Warning: failed to migrate sla_thresholds column on k6_templates: %v", err)
 		}
+	}
+}
+
+func (db *DB) ensureTypedTemplateColumns() {
+	db.ensureRunnerImageColumn()
+	db.ensureSlaThresholdsColumn()
+
+	columns := []struct {
+		name string
+		ddl  string
+	}{
+		{"template_type", "TEXT NOT NULL DEFAULT 'testrun'"},
+		{"schedule_enabled", "INTEGER NOT NULL DEFAULT 0"},
+		{"schedule_cron_expression", "TEXT NOT NULL DEFAULT ''"},
+		{"schedule_active", "INTEGER NOT NULL DEFAULT 1"},
+		{"schedule_cluster_id", "TEXT NOT NULL DEFAULT ''"},
+		{"schedule_namespace", "TEXT NOT NULL DEFAULT ''"},
+	}
+
+	for _, col := range columns {
+		if db.driver == "postgres" {
+			stmt := fmt.Sprintf("ALTER TABLE k6_templates ADD COLUMN IF NOT EXISTS %s %s;", col.name, col.ddl)
+			if _, err := db.conn.Exec(stmt); err != nil {
+				log.Printf("Warning: failed to migrate %s column on k6_templates: %v", col.name, err)
+			}
+			continue
+		}
+
+		hasColumn := false
+		rows, err := db.conn.Query("PRAGMA table_info(k6_templates);")
+		if err == nil {
+			for rows.Next() {
+				var cid int
+				var name, ctype string
+				var notnull, pk int
+				var dfltVal sql.NullString
+				if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltVal, &pk); err == nil && name == col.name {
+					hasColumn = true
+				}
+			}
+			rows.Close()
+		}
+		if !hasColumn {
+			stmt := fmt.Sprintf("ALTER TABLE k6_templates ADD COLUMN %s %s;", col.name, col.ddl)
+			if _, err := db.conn.Exec(stmt); err != nil {
+				log.Printf("Warning: failed to migrate %s column on k6_templates: %v", col.name, err)
+			}
+		}
+	}
+
+	backfill := db.rebind(`UPDATE k6_templates SET template_type = 'testrun' WHERE template_type IS NULL OR template_type = '';`)
+	if _, err := db.conn.Exec(backfill); err != nil {
+		log.Printf("Warning: failed to backfill template_type on k6_templates: %v", err)
 	}
 }
 
